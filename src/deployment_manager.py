@@ -198,3 +198,106 @@ class DeploymentManager:
             
         except Exception as e:
             raise Exception(f"Failed to delete environment: {str(e)}")
+    
+    def get_environment_endpoints(self, environment: str, project_name: str = "bragi") -> Dict:
+        """Get public-facing endpoints and IP addresses for an environment"""
+        resource_group_name = f"{project_name}-{environment}-rg"
+        
+        try:
+            # Get all resources in the resource group
+            resources = self.azure_client.list_resources_in_group(resource_group_name)
+            
+            endpoints = {
+                "app_service": None,
+                "storage_account": None,
+                "sql_server": None,
+                "vnet": None,
+                "public_ips": []
+            }
+            
+            for resource in resources:
+                resource_type = resource.type
+                resource_name = resource.name
+                
+                if "Microsoft.Web/sites" in resource_type:
+                    # Get App Service details
+                    try:
+                        app_service = self.azure_client.web_client.web_apps.get(
+                            resource_group_name, resource_name
+                        )
+                        endpoints["app_service"] = {
+                            "name": resource_name,
+                            "url": f"https://{app_service.default_host_name}",
+                            "hostname": app_service.default_host_name,
+                            "state": app_service.state,
+                            "https_only": app_service.https_only
+                        }
+                    except Exception as e:
+                        print(f"Error getting App Service details: {e}")
+                
+                elif "Microsoft.Storage/storageAccounts" in resource_type:
+                    # Get Storage Account details
+                    try:
+                        storage_account = self.azure_client.storage_client.storage_accounts.get_properties(
+                            resource_group_name, resource_name
+                        )
+                        endpoints["storage_account"] = {
+                            "name": resource_name,
+                            "primary_endpoint": f"https://{resource_name}.blob.core.windows.net",
+                            "primary_location": storage_account.primary_location,
+                            "status": storage_account.status_of_primary
+                        }
+                    except Exception as e:
+                        print(f"Error getting Storage Account details: {e}")
+                
+                elif "Microsoft.Sql/servers" in resource_type and "/databases" not in resource_type:
+                    # Get SQL Server details (only for the server, not databases)
+                    try:
+                        sql_server = self.azure_client.sql_client.servers.get(
+                            resource_group_name, resource_name
+                        )
+                        endpoints["sql_server"] = {
+                            "name": resource_name,
+                            "fqdn": sql_server.fully_qualified_domain_name,
+                            "version": sql_server.version,
+                            "state": sql_server.state
+                        }
+                    except Exception as e:
+                        print(f"Error getting SQL Server details: {e}")
+                
+                elif "Microsoft.Network/virtualNetworks" in resource_type:
+                    # Get VNet details
+                    try:
+                        vnet = self.azure_client.resource_client.resources.get(
+                            resource_group_name, "Microsoft.Network", "", 
+                            "virtualNetworks", resource_name, "2021-05-01"
+                        )
+                        endpoints["vnet"] = {
+                            "name": resource_name,
+                            "address_space": vnet.properties.address_space.address_prefixes if hasattr(vnet.properties, 'address_space') else [],
+                            "subnets": [subnet.name for subnet in vnet.properties.subnets] if hasattr(vnet.properties, 'subnets') else []
+                        }
+                    except Exception as e:
+                        print(f"Error getting VNet details: {e}")
+                
+                elif "Microsoft.Network/publicIPAddresses" in resource_type:
+                    # Get Public IP details
+                    try:
+                        public_ip = self.azure_client.resource_client.resources.get(
+                            resource_group_name, "Microsoft.Network", "", 
+                            "publicIPAddresses", resource_name, "2021-05-01"
+                        )
+                        if hasattr(public_ip.properties, 'ip_address') and public_ip.properties.ip_address:
+                            endpoints["public_ips"].append({
+                                "name": resource_name,
+                                "ip_address": public_ip.properties.ip_address,
+                                "allocation_method": public_ip.properties.public_ip_allocation_method
+                            })
+                    except Exception as e:
+                        print(f"Error getting Public IP details: {e}")
+            
+            return endpoints
+            
+        except Exception as e:
+            print(f"Error getting environment endpoints: {e}")
+            return {}

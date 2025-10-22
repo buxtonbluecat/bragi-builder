@@ -107,7 +107,7 @@
     "uniqueSuffix": "[uniqueString(resourceGroup().id, parameters('environment'))]",
     "appServiceName": "[concat(parameters('projectName'), '-app-', parameters('environment'), '-', variables('uniqueSuffix'))]",
     "appServicePlanName": "[concat(parameters('projectName'), '-plan-', parameters('environment'), '-', variables('uniqueSuffix'))]",
-    "storageAccountName": "[concat(parameters('projectName'), 'stg', parameters('environment'), variables('uniqueSuffix'))]",
+    "storageAccountName": "[concat(take(parameters('projectName'), 8), 'stg', take(parameters('environment'), 3), take(variables('uniqueSuffix'), 8))]",
     "sqlServerName": "[concat(parameters('projectName'), '-sql-', parameters('environment'), '-', variables('uniqueSuffix'))]",
     "vnetName": "[concat(parameters('projectName'), '-vnet-', parameters('environment'), '-', variables('uniqueSuffix'))]",
     "metaDatabaseName": "[concat(parameters('projectName'), '-meta-', parameters('environment'))]",
@@ -116,7 +116,8 @@
     "appServiceSubnetPrefix": "10.0.1.0/24",
     "databaseSubnetPrefix": "10.0.2.0/24",
     "storageSubnetPrefix": "10.0.3.0/24",
-    "managementSubnetPrefix": "10.0.4.0/24"
+    "managementSubnetPrefix": "10.0.4.0/24",
+    "appServiceTier": "[if(equals(parameters('appServiceSku'), 'F1'), 'Free', 'Basic')]"
   },
   "resources": [
     {
@@ -173,7 +174,7 @@
       "location": "[parameters('location')]",
       "sku": {
         "name": "[parameters('appServiceSku')]",
-        "tier": "[if(equals(parameters('appServiceSku'), 'F1'), 'Free', if(contains(parameters('appServiceSku'), 'B'), 'Basic', if(contains(parameters('appServiceSku'), 'S'), 'Standard', 'Premium'))]"
+        "tier": "[variables('appServiceTier')]"
       },
       "kind": "linux",
       "properties": {
@@ -251,14 +252,9 @@
         "allowSharedKeyAccess": true,
         "networkAcls": {
           "bypass": "AzureServices",
-          "virtualNetworkRules": [
-            {
-              "id": "[resourceId('Microsoft.Network/virtualNetworks/subnets', variables('vnetName'), 'storage-subnet')]",
-              "action": "Allow"
-            }
-          ],
+          "virtualNetworkRules": [],
           "ipRules": [],
-          "defaultAction": "Deny"
+          "defaultAction": "Allow"
         },
         "encryption": {
           "services": {

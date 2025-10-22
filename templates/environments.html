@@ -1,0 +1,134 @@
+{% extends "base.html" %}
+
+{% block title %}Environment Management - Bragi Builder{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <div class="row">
+        <div class="col-12">
+            <h2>Environment Management</h2>
+            <p class="text-muted">Manage your deployed Azure environments</p>
+        </div>
+    </div>
+
+    <div class="row">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header">
+                    <h5 class="mb-0">Deployed Environments</h5>
+                </div>
+                <div class="card-body">
+                    <div id="environments-list">
+                        <div class="text-center">
+                            <div class="spinner-border" role="status">
+                                <span class="visually-hidden">Loading...</span>
+                            </div>
+                            <p class="mt-2">Loading environments...</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    loadEnvironments();
+});
+
+function loadEnvironments() {
+    // Get resource groups that match our naming pattern
+    fetch('/resource-groups')
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                displayEnvironments(data.resource_groups);
+            } else {
+                document.getElementById('environments-list').innerHTML = 
+                    '<div class="alert alert-danger">Error loading environments: ' + data.message + '</div>';
+            }
+        })
+        .catch(error => {
+            document.getElementById('environments-list').innerHTML = 
+                '<div class="alert alert-danger">Error loading environments: ' + error.message + '</div>';
+        });
+}
+
+function displayEnvironments(resourceGroups) {
+    const container = document.getElementById('environments-list');
+    
+    // Filter resource groups that match our naming pattern (project-environment-rg)
+    const environments = resourceGroups.filter(rg => rg.name.endsWith('-rg'));
+    
+    if (environments.length === 0) {
+        container.innerHTML = '<div class="alert alert-info">No environments found.</div>';
+        return;
+    }
+    
+    let html = '<div class="row">';
+    
+    environments.forEach(env => {
+        const parts = env.name.split('-');
+        const projectName = parts.slice(0, -2).join('-');
+        const environment = parts[parts.length - 2];
+        
+        html += `
+            <div class="col-md-6 col-lg-4 mb-3">
+                <div class="card h-100">
+                    <div class="card-body">
+                        <h6 class="card-title">${projectName} - ${environment}</h6>
+                        <p class="card-text">
+                            <small class="text-muted">
+                                Resource Group: ${env.name}<br>
+                                Location: ${env.location}<br>
+                                Status: <span class="badge bg-success">Active</span>
+                            </small>
+                        </p>
+                    </div>
+                    <div class="card-footer">
+                        <div class="btn-group w-100" role="group">
+                            <button class="btn btn-outline-primary btn-sm" onclick="viewEndpoints('${environment}', '${projectName}')">
+                                <i class="bi bi-eye"></i> Endpoints
+                            </button>
+                            <button class="btn btn-outline-danger btn-sm" onclick="deleteEnvironment('${environment}', '${projectName}')">
+                                <i class="bi bi-trash"></i> Delete
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+    });
+    
+    html += '</div>';
+    container.innerHTML = html;
+}
+
+function viewEndpoints(environment, projectName) {
+    window.open(`/environments/${environment}/endpoints?project_name=${projectName}`, '_blank');
+}
+
+function deleteEnvironment(environment, projectName) {
+    if (!confirm(`Are you sure you want to delete the environment '${environment}' in project '${projectName}'?\n\nThis will delete the entire resource group and all resources. This action cannot be undone!`)) {
+        return;
+    }
+    
+    fetch(`/environments/${environment}?project_name=${projectName}`, {
+        method: 'DELETE'
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            alert('Environment deletion started successfully! This may take several minutes to complete.');
+            loadEnvironments(); // Refresh the list
+        } else {
+            alert('Error deleting environment: ' + data.message);
+        }
+    })
+    .catch(error => {
+        alert('Error deleting environment: ' + error.message);
+    });
+}
+</script>
+{% endblock %}

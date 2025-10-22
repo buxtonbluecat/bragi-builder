@@ -4,7 +4,10 @@ Main Flask application
 """
 import os
 import json
+import threading
+import time
 from flask import Flask, render_template, request, jsonify, redirect, url_for, flash
+from flask_socketio import SocketIO, emit
 from dotenv import load_dotenv
 from src.azure_client import AzureClient
 from src.template_manager import TemplateManager
@@ -18,6 +21,10 @@ load_dotenv()
 
 app = Flask(__name__)
 app.secret_key = os.getenv('SECRET_KEY', 'dev-secret-key-change-in-production')
+socketio = SocketIO(app, cors_allowed_origins="*")
+
+# Set Azure subscription ID for Azure CLI authentication
+os.environ['AZURE_SUBSCRIPTION_ID'] = '693bb5f4-bea9-4714-b990-55d5a4032ae1'
 
 # Initialize managers
 try:
@@ -34,6 +41,53 @@ except Exception as e:
 offline_review = OfflineReviewManager()
 workload_config = WorkloadConfigManager()
 template_wizard = TemplateWizard()
+
+# Deployment status tracking
+deployment_statuses = {}
+
+def monitor_deployment_status(deployment_name, resource_group_name):
+    """Monitor deployment status and emit updates via WebSocket"""
+    try:
+        while True:
+            if deployment_name not in deployment_statuses:
+                break
+                
+            # Get deployment status from Azure
+            status = azure_client.get_deployment_status(resource_group_name, deployment_name)
+            
+            if status:
+                # Update our tracking
+                deployment_statuses[deployment_name]['status'] = status['provisioning_state']
+                deployment_statuses[deployment_name]['timestamp'] = status['timestamp'].isoformat()
+                
+                # Emit update to all connected clients
+                socketio.emit('deployment_update', {
+                    'deployment_name': deployment_name,
+                    'status': status['provisioning_state'],
+                    'timestamp': status['timestamp'].isoformat(),
+                    'outputs': status.get('outputs', {})
+                })
+                
+                # If deployment is complete (success or failed), stop monitoring
+                if status['provisioning_state'] in ['Succeeded', 'Failed', 'Canceled']:
+                    deployment_statuses[deployment_name]['completed'] = True
+                    break
+            else:
+                # Deployment not found, stop monitoring
+                break
+                
+            time.sleep(5)  # Check every 5 seconds
+            
+    except Exception as e:
+        print(f"Error monitoring deployment {deployment_name}: {e}")
+        socketio.emit('deployment_error', {
+            'deployment_name': deployment_name,
+            'error': str(e)
+        })
+    finally:
+        # Clean up
+        if deployment_name in deployment_statuses:
+            del deployment_statuses[deployment_name]
 
 
 @app.route('/')
@@ -120,9 +174,13 @@ def deployments():
     except Exception as e:
         flash(f"Failed to load resource groups: {str(e)}", "error")
     
+    # Get available templates
+    templates = template_manager.list_templates()
+    
     return render_template('deployments.html',
                          deployments=deployments,
-                         resource_groups=resource_groups)
+                         resource_groups=resource_groups,
+                         templates=templates)
 
 
 @app.route('/deploy', methods=['POST'])
@@ -133,9 +191,35 @@ def deploy():
     
     try:
         data = request.get_json()
+        print(f"Received deployment data: {data}")
         template_name = data.get('template_name')
         resource_group = data.get('resource_group')
         parameters = data.get('parameters', {})
+        
+        # Add SQL admin parameters - use defaults if not provided
+        sql_admin_login = data.get('sql_admin_login') or 'sqladmin'
+        sql_admin_password = data.get('sql_admin_password')
+        
+        parameters['sqlAdministratorLogin'] = {
+            "value": sql_admin_login
+        }
+        
+        if sql_admin_password:
+            parameters['sqlAdministratorLoginPassword'] = {
+                "value": sql_admin_password
+            }
+        
+        # Handle any additional JSON parameters from the form
+        if data.get('parameters'):
+            additional_params = data.get('parameters')
+            for key, value in additional_params.items():
+                parameters[key] = {
+                    "value": value
+                }
+        
+        print(f"Parsed values - template_name: '{template_name}', resource_group: '{resource_group}'")
+        print(f"SQL Admin Login: '{sql_admin_login}', Password provided: {bool(sql_admin_password)}")
+        print(f"Parameters: {parameters}")
         
         if not template_name or not resource_group:
             return jsonify({"success": False, "message": "Template name and resource group are required"}), 400
@@ -152,6 +236,23 @@ def deploy():
             resource_group_name=resource_group,
             parameters=parameters
         )
+        
+        # Start monitoring the deployment
+        deployment_name = result.get('deployment_name')
+        if deployment_name:
+            deployment_statuses[deployment_name] = {
+                'status': 'Running',
+                'started': True,
+                'completed': False
+            }
+            
+            # Start monitoring in a separate thread
+            monitor_thread = threading.Thread(
+                target=monitor_deployment_status,
+                args=(deployment_name, resource_group)
+            )
+            monitor_thread.daemon = True
+            monitor_thread.start()
         
         return jsonify({"success": True, "deployment": result})
         
@@ -216,6 +317,52 @@ def environment_resources(environment):
         return jsonify(resources)
     except Exception as e:
         return jsonify({"error": str(e)}), 400
+
+
+@app.route('/environments/<environment>/endpoints')
+def environment_endpoints(environment):
+    """Get public-facing endpoints for an environment"""
+    if not deployment_manager:
+        return jsonify({"error": "Azure client not configured"}), 400
+    
+    try:
+        project_name = request.args.get('project_name', 'bragi')
+        endpoints = deployment_manager.get_environment_endpoints(environment, project_name)
+        return jsonify(endpoints)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+
+@app.route('/environments')
+def environments_page():
+    """Environment management page"""
+    return render_template('environments.html')
+
+
+@app.route('/api/regions')
+def get_regions():
+    """Get all available Azure regions"""
+    if not azure_client:
+        return jsonify({"error": "Azure client not configured"}), 400
+    
+    try:
+        regions = azure_client.get_available_regions()
+        return jsonify({"success": True, "regions": regions})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 400
+
+
+@app.route('/api/regions/<region>/validate')
+def validate_region(region):
+    """Validate deployment capabilities for a specific region"""
+    if not azure_client:
+        return jsonify({"error": "Azure client not configured"}), 400
+    
+    try:
+        capabilities = azure_client.validate_region_capabilities(region)
+        return jsonify({"success": True, "region": region, "capabilities": capabilities})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 400
 
 
 @app.route('/environments/<environment>', methods=['DELETE'])
@@ -478,5 +625,33 @@ def generate_wizard_template(session_id):
         return jsonify({"success": False, "message": str(e)}), 400
 
 
+# WebSocket event handlers
+@socketio.on('connect')
+def handle_connect():
+    """Handle client connection"""
+    print('Client connected')
+    emit('connected', {'data': 'Connected to deployment status updates'})
+
+
+@socketio.on('disconnect')
+def handle_disconnect():
+    """Handle client disconnection"""
+    print('Client disconnected')
+
+
+@socketio.on('get_deployment_status')
+def handle_get_deployment_status(data):
+    """Handle request for deployment status"""
+    deployment_name = data.get('deployment_name')
+    if not deployment_name or deployment_name.strip() == '':
+        emit('deployment_status', {'error': 'No deployment name provided'})
+        return
+    
+    if deployment_name in deployment_statuses:
+        emit('deployment_status', deployment_statuses[deployment_name])
+    else:
+        emit('deployment_status', {'error': 'Deployment not found'})
+
+
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=8080)
+    socketio.run(app, debug=True, host='0.0.0.0', port=8080, allow_unsafe_werkzeug=True)

@@ -2,6 +2,7 @@
 Azure client for managing ARM template deployments
 """
 import os
+from typing import List, Dict
 from azure.identity import DefaultAzureCredential, ClientSecretCredential
 from azure.mgmt.resource import ResourceManagementClient
 from azure.mgmt.web import WebSiteManagementClient
@@ -41,12 +42,12 @@ class AzureClient:
     
     def _get_credential(self):
         """Get Azure credentials based on environment"""
-        # Try service principal first
+        # Try service principal first (only if all are properly set and not empty)
         client_id = os.getenv('AZURE_CLIENT_ID')
         client_secret = os.getenv('AZURE_CLIENT_SECRET')
         tenant_id = os.getenv('AZURE_TENANT_ID')
         
-        if all([client_id, client_secret, tenant_id]):
+        if all([client_id, client_secret, tenant_id]) and all([client_id.strip(), client_secret.strip(), tenant_id.strip()]) and not any([client_id == 'your-client-id', client_secret == 'your-client-secret', tenant_id == 'your-tenant-id']):
             return ClientSecretCredential(
                 tenant_id=tenant_id,
                 client_id=client_id,
@@ -54,7 +55,8 @@ class AzureClient:
             )
         
         # Fall back to default credential (Azure CLI, Managed Identity, etc.)
-        return DefaultAzureCredential()
+        # Exclude EnvironmentCredential to avoid issues with empty env vars
+        return DefaultAzureCredential(exclude_environment_credential=True)
     
     def deploy_template(self, resource_group_name: str, template: dict, 
                        parameters: dict = None, deployment_name: str = None):
@@ -63,9 +65,11 @@ class AzureClient:
             deployment_name = f"deployment-{os.urandom(4).hex()}"
         
         deployment_properties = {
-            "mode": "Incremental",
-            "template": template,
-            "parameters": parameters or {}
+            "properties": {
+                "mode": "Incremental",
+                "template": template,
+                "parameters": parameters or {}
+            }
         }
         
         try:
@@ -114,7 +118,7 @@ class AzureClient:
         """Create a new resource group"""
         try:
             resource_group = self.resource_client.resource_groups.create_or_update(
-                name=name,
+                resource_group_name=name,
                 parameters={"location": location}
             )
             return resource_group
@@ -139,3 +143,85 @@ class AzureClient:
             return [resource for resource in resources]
         except Exception as e:
             raise Exception(f"Failed to list resources: {str(e)}")
+    
+    def get_available_regions(self) -> List[Dict]:
+        """Get all available Azure regions"""
+        try:
+            locations = self.resource_client.providers.list()
+            regions = []
+            
+            for provider in locations:
+                if provider.namespace == "Microsoft.Resources":
+                    for resource_type in provider.resource_types:
+                        if resource_type.resource_type == "resourceGroups":
+                            for location in resource_type.locations:
+                                regions.append({
+                                    "name": location,
+                                    "display_name": location.replace(" ", "").title(),
+                                    "available": True
+                                })
+                            break
+            
+            # Sort regions alphabetically
+            regions.sort(key=lambda x: x["name"])
+            return regions
+            
+        except Exception as e:
+            print(f"Error getting available regions: {e}")
+            return []
+    
+    def validate_region_capabilities(self, location: str) -> Dict:
+        """Validate what services can be deployed in a specific region"""
+        try:
+            capabilities = {
+                "app_service": False,
+                "storage": False,
+                "sql_server": False,
+                "vnet": False,
+                "overall": True
+            }
+            
+            # Check App Service availability
+            try:
+                web_sites = self.web_client.app_service_plans.list()
+                # If we can list app service plans, the service is available
+                capabilities["app_service"] = True
+            except Exception:
+                capabilities["app_service"] = False
+            
+            # Check Storage availability
+            try:
+                storage_accounts = self.storage_client.storage_accounts.list()
+                capabilities["storage"] = True
+            except Exception:
+                capabilities["storage"] = False
+            
+            # Check SQL Server availability
+            try:
+                sql_servers = self.sql_client.servers.list()
+                capabilities["sql_server"] = True
+            except Exception:
+                capabilities["sql_server"] = False
+            
+            # VNet is generally available in all regions
+            capabilities["vnet"] = True
+            
+            # Overall capability (all required services available)
+            capabilities["overall"] = all([
+                capabilities["app_service"],
+                capabilities["storage"],
+                capabilities["sql_server"],
+                capabilities["vnet"]
+            ])
+            
+            return capabilities
+            
+        except Exception as e:
+            print(f"Error validating region capabilities: {e}")
+            return {
+                "app_service": False,
+                "storage": False,
+                "sql_server": False,
+                "vnet": False,
+                "overall": False
+            }

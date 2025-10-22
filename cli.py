@@ -231,6 +231,115 @@ def deployment_status(deployment_name):
         sys.exit(1)
 
 
+@deploy.command('endpoints')
+@click.argument('environment')
+@click.option('--project-name', '-p', default='bragi', help='Project name prefix')
+def deployment_endpoints(environment, project_name):
+    """Get public-facing endpoints and IP addresses for an environment"""
+    try:
+        # Initialize clients
+        azure_client = AzureClient()
+        tm = TemplateManager()
+        dm = DeploymentManager(azure_client, tm)
+        
+        click.echo(f"Getting endpoints for environment '{environment}' in project '{project_name}'...")
+        endpoints = dm.get_environment_endpoints(environment, project_name)
+        
+        if not endpoints:
+            click.echo("No endpoints found or environment doesn't exist.", err=True)
+            sys.exit(1)
+        
+        click.echo(f"\n🌐 Environment Endpoints for {project_name}-{environment}")
+        click.echo("=" * 50)
+        
+        # App Service
+        if endpoints.get('app_service'):
+            app = endpoints['app_service']
+            click.echo(f"\n📱 App Service: {app['name']}")
+            click.echo(f"   URL: {app['url']}")
+            click.echo(f"   Hostname: {app['hostname']}")
+            click.echo(f"   State: {app['state']}")
+            click.echo(f"   HTTPS Only: {app['https_only']}")
+        
+        # Storage Account
+        if endpoints.get('storage_account'):
+            storage = endpoints['storage_account']
+            click.echo(f"\n💾 Storage Account: {storage['name']}")
+            click.echo(f"   Blob Endpoint: {storage['primary_endpoint']}")
+            click.echo(f"   Location: {storage['primary_location']}")
+            click.echo(f"   Status: {storage['status']}")
+        
+        # SQL Server
+        if endpoints.get('sql_server'):
+            sql = endpoints['sql_server']
+            click.echo(f"\n🗄️  SQL Server: {sql['name']}")
+            click.echo(f"   FQDN: {sql['fqdn']}")
+            click.echo(f"   Version: {sql['version']}")
+            click.echo(f"   State: {sql['state']}")
+        
+        # VNet
+        if endpoints.get('vnet'):
+            vnet = endpoints['vnet']
+            click.echo(f"\n🌐 Virtual Network: {vnet['name']}")
+            click.echo(f"   Address Space: {', '.join(vnet['address_space'])}")
+            click.echo(f"   Subnets: {', '.join(vnet['subnets'])}")
+        
+        # Public IPs
+        if endpoints.get('public_ips'):
+            click.echo(f"\n🔗 Public IP Addresses:")
+            for ip in endpoints['public_ips']:
+                click.echo(f"   {ip['name']}: {ip['ip_address']} ({ip['allocation_method']})")
+        
+        if not any([endpoints.get('app_service'), endpoints.get('storage_account'), 
+                   endpoints.get('sql_server'), endpoints.get('vnet'), endpoints.get('public_ips')]):
+            click.echo("No public endpoints found in this environment.")
+        
+    except Exception as e:
+        click.echo(f"Error: {str(e)}", err=True)
+        sys.exit(1)
+
+
+@deploy.command('delete')
+@click.argument('environment')
+@click.option('--project-name', '-p', default='bragi', help='Project name prefix')
+@click.option('--confirm', '-y', is_flag=True, help='Skip confirmation prompt')
+def delete_environment(environment, project_name, confirm):
+    """Delete an entire environment (resource group and all resources)"""
+    resource_group_name = f"{project_name}-{environment}-rg"
+    
+    if not confirm:
+        click.echo(f"⚠️  WARNING: This will delete the entire environment '{environment}' in project '{project_name}'")
+        click.echo(f"   Resource Group: {resource_group_name}")
+        click.echo("   This action cannot be undone!")
+        
+        if not click.confirm("Are you sure you want to continue?"):
+            click.echo("Deletion cancelled.")
+            return
+    
+    try:
+        # Initialize clients
+        azure_client = AzureClient()
+        tm = TemplateManager()
+        dm = DeploymentManager(azure_client, tm)
+        
+        click.echo(f"Deleting environment '{environment}' in project '{project_name}'...")
+        click.echo(f"Resource Group: {resource_group_name}")
+        
+        success = dm.delete_environment(environment, project_name)
+        
+        if success:
+            click.echo(f"✅ Environment '{environment}' deletion started successfully!")
+            click.echo("   This may take several minutes to complete.")
+            click.echo("   You can check the Azure portal to monitor progress.")
+        else:
+            click.echo(f"❌ Environment '{environment}' not found or already deleted.")
+            sys.exit(1)
+            
+    except Exception as e:
+        click.echo(f"Error: {str(e)}", err=True)
+        sys.exit(1)
+
+
 @cli.group()
 def resource():
     """Resource management commands"""

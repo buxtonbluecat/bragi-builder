@@ -48,9 +48,13 @@
                                     </span>
                                 </div>
                                 <div>
+                                    {% if deployment.deployment_name %}
                                     <button class="btn btn-sm btn-outline-primary" onclick="getDeploymentStatus('{{ deployment.deployment_name }}')">
                                         <i class="fas fa-sync-alt"></i> Refresh Status
                                     </button>
+                                    {% else %}
+                                    <span class="text-muted">No deployment name</span>
+                                    {% endif %}
                                 </div>
                             </div>
                         </div>
@@ -106,30 +110,63 @@
                     
                     <div class="mb-3">
                         <label for="resourceGroup" class="form-label">Resource Group</label>
-                        <select class="form-select" id="resourceGroup" name="resource_group" required>
-                            <option value="">Select or create resource group...</option>
-                            {% for rg in resource_groups %}
-                            <option value="{{ rg.name }}">{{ rg.name }} ({{ rg.location }})</option>
-                            {% endfor %}
-                        </select>
-                        <div class="form-text">Or enter a new resource group name to create it</div>
+                        <div class="input-group">
+                            <select class="form-select" id="resourceGroup" name="resource_group" onchange="toggleResourceGroupInput()">
+                                <option value="">Select existing resource group...</option>
+                                {% for rg in resource_groups %}
+                                <option value="{{ rg.name }}">{{ rg.name }} ({{ rg.location }})</option>
+                                {% endfor %}
+                                <option value="__new__">Create new resource group...</option>
+                            </select>
+                        </div>
+                        <div id="newResourceGroupInput" class="mt-2" style="display: none;">
+                            <input type="text" class="form-control" id="newResourceGroupName" name="new_resource_group_name" placeholder="Enter new resource group name">
+                            <div class="form-text">New resource group will be created in the selected location</div>
+                        </div>
+                        <div class="form-text">Select an existing resource group or create a new one</div>
                     </div>
                     
                     <div class="mb-3">
                         <label for="location" class="form-label">Location</label>
-                        <select class="form-select" id="location" name="location">
-                            <option value="East US">East US</option>
-                            <option value="West US">West US</option>
-                            <option value="West Europe">West Europe</option>
-                            <option value="East Asia">East Asia</option>
+                        <select class="form-select" id="location" name="location" onchange="validateRegion()">
+                            <option value="">Loading regions...</option>
                         </select>
                         <div class="form-text">Used when creating a new resource group</div>
+                        <div id="regionValidation" class="form-text" style="display: none;">
+                            <div id="validationStatus" class="d-flex align-items-center">
+                                <div class="spinner-border spinner-border-sm me-2" role="status">
+                                    <span class="visually-hidden">Validating...</span>
+                                </div>
+                                <span>Validating region capabilities...</span>
+                            </div>
+                        </div>
+                        <div id="regionCapabilities" class="mt-2" style="display: none;">
+                            <small class="text-muted">Service Availability:</small>
+                            <div class="d-flex flex-wrap gap-2 mt-1">
+                                <span id="appServiceStatus" class="badge">App Service</span>
+                                <span id="storageStatus" class="badge">Storage</span>
+                                <span id="sqlStatus" class="badge">SQL Server</span>
+                                <span id="vnetStatus" class="badge">VNet</span>
+                            </div>
+                        </div>
                     </div>
                     
                     <div class="mb-3">
-                        <label for="parameters" class="form-label">Parameters (JSON)</label>
+                        <label for="sqlAdminLogin" class="form-label">SQL Admin Login</label>
+                        <input type="text" class="form-control" id="sqlAdminLogin" name="sql_admin_login" value="sqladmin" placeholder="sqladmin">
+                        <div class="form-text">SQL Server administrator username</div>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label for="sqlAdminPassword" class="form-label">SQL Admin Password</label>
+                        <input type="password" class="form-control" id="sqlAdminPassword" name="sql_admin_password" required placeholder="Enter SQL admin password">
+                        <div class="form-text">SQL Server administrator password (required for complete-environment template)</div>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label for="parameters" class="form-label">Additional Parameters (JSON)</label>
                         <textarea class="form-control" id="parameters" name="parameters" rows="4" placeholder='{"param1": "value1", "param2": "value2"}'></textarea>
-                        <div class="form-text">Enter parameters as JSON (optional)</div>
+                        <div class="form-text">Enter additional parameters as JSON (optional)</div>
                     </div>
                 </form>
             </div>
@@ -143,16 +180,141 @@
 {% endblock %}
 
 {% block scripts %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.js"></script>
 <script>
+// WebSocket connection for real-time updates
+const socket = io();
+
+// Deployment status tracking
+let currentDeployment = null;
+
+// WebSocket event handlers
+socket.on('connect', function() {
+    console.log('Connected to deployment status updates');
+});
+
+socket.on('deployment_update', function(data) {
+    console.log('Deployment update:', data);
+    updateDeploymentStatus(data);
+});
+
+socket.on('deployment_error', function(data) {
+    console.error('Deployment error:', data);
+    showDeploymentError(data);
+});
+
+socket.on('deployment_status', function(data) {
+    console.log('Deployment status:', data);
+    updateDeploymentStatus(data);
+});
+
+function updateDeploymentStatus(data) {
+    const statusElement = document.getElementById('deploymentStatus');
+    if (statusElement) {
+        statusElement.innerHTML = `
+            <div class="alert alert-info">
+                <h6>Deployment Status: ${data.status}</h6>
+                <p>Deployment: ${data.deployment_name}</p>
+                <p>Last Updated: ${new Date(data.timestamp).toLocaleString()}</p>
+                ${data.outputs ? '<p>Outputs: ' + JSON.stringify(data.outputs) + '</p>' : ''}
+            </div>
+        `;
+    }
+    
+    // If deployment is complete, refresh the page
+    if (data.status === 'Succeeded' || data.status === 'Failed' || data.status === 'Canceled') {
+        setTimeout(() => {
+            location.reload();
+        }, 3000);
+    }
+}
+
+function showDeploymentError(data) {
+    const statusElement = document.getElementById('deploymentStatus');
+    if (statusElement) {
+        statusElement.innerHTML = `
+            <div class="alert alert-danger">
+                <h6>Deployment Error</h6>
+                <p>Deployment: ${data.deployment_name}</p>
+                <p>Error: ${data.error}</p>
+            </div>
+        `;
+    }
+}
+
+function showDeploymentStatusArea() {
+    // Create or show the status area
+    let statusElement = document.getElementById('deploymentStatus');
+    if (!statusElement) {
+        statusElement = document.createElement('div');
+        statusElement.id = 'deploymentStatus';
+        statusElement.className = 'mt-3';
+        
+        // Insert after the deployments table
+        const deploymentsTable = document.querySelector('.table');
+        if (deploymentsTable) {
+            deploymentsTable.parentNode.insertBefore(statusElement, deploymentsTable.nextSibling);
+        }
+    }
+    
+    statusElement.innerHTML = `
+        <div class="alert alert-info">
+            <div class="d-flex align-items-center">
+                <div class="spinner-border spinner-border-sm me-2" role="status">
+                    <span class="visually-hidden">Loading...</span>
+                </div>
+                <span>Starting deployment...</span>
+            </div>
+        </div>
+    `;
+    statusElement.style.display = 'block';
+}
+
 function deployTemplate() {
     const form = document.getElementById('deployForm');
     const formData = new FormData(form);
     
+    // Handle resource group selection
+    let resourceGroup = formData.get('resource_group');
+    if (resourceGroup === '__new__') {
+        const newResourceGroupName = formData.get('new_resource_group_name');
+        if (!newResourceGroupName || newResourceGroupName.trim() === '') {
+            alert('Please enter a name for the new resource group');
+            return;
+        }
+        resourceGroup = newResourceGroupName.trim();
+    }
+    
+    if (!resourceGroup) {
+        alert('Please select or create a resource group');
+        return;
+    }
+    
+    // Validate SQL admin password for complete-environment template
+    const templateName = formData.get('template_name');
+    const sqlPassword = formData.get('sql_admin_password');
+    if (templateName === 'complete-environment' && !sqlPassword) {
+        alert('SQL Admin Password is required for complete-environment template');
+        return;
+    }
+    
     const data = {
         template_name: formData.get('template_name'),
-        resource_group: formData.get('resource_group'),
-        location: formData.get('location')
+        resource_group: resourceGroup,
+        location: formData.get('location'),
+        sql_admin_login: formData.get('sql_admin_login'),
+        sql_admin_password: formData.get('sql_admin_password')
     };
+    
+    // Debug logging
+    console.log('Form data collected:', {
+        template_name: formData.get('template_name'),
+        resource_group: resourceGroup,
+        location: formData.get('location'),
+        sql_admin_login: formData.get('sql_admin_login'),
+        sql_admin_password: formData.get('sql_admin_password') ? '[HIDDEN]' : 'not provided',
+        parameters: formData.get('parameters')
+    });
     
     // Parse parameters JSON
     const parametersText = formData.get('parameters');
@@ -165,6 +327,11 @@ function deployTemplate() {
         }
     }
     
+    console.log('Final data being sent:', data);
+    
+    // Show status area
+    showDeploymentStatusArea();
+    
     fetch('/deploy', {
         method: 'POST',
         headers: {
@@ -175,20 +342,43 @@ function deployTemplate() {
     .then(response => response.json())
     .then(data => {
         if (data.success) {
-            alert('Deployment started successfully!');
-            location.reload();
+            currentDeployment = data.deployment.deployment_name;
+            updateDeploymentStatus({
+                deployment_name: currentDeployment,
+                status: 'Running',
+                timestamp: new Date().toISOString()
+            });
+            
+            // Request status updates
+            socket.emit('get_deployment_status', {deployment_name: currentDeployment});
         } else {
-            alert('Error: ' + data.message);
+            showDeploymentError({
+                deployment_name: 'Unknown',
+                error: data.message
+            });
         }
     })
     .catch(error => {
-        alert('Error: ' + error);
+        showDeploymentError({
+            deployment_name: 'Unknown',
+            error: error.toString()
+        });
     });
 }
 
 function getDeploymentStatus(deploymentName) {
+    if (!deploymentName || deploymentName.trim() === '') {
+        alert('Error: No deployment name provided');
+        return;
+    }
+    
     fetch(`/deployments/${deploymentName}/status`)
-    .then(response => response.json())
+    .then(response => {
+        if (!response.ok) {
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+        return response.json();
+    })
     .then(data => {
         if (data.error) {
             alert('Error: ' + data.error);
@@ -198,8 +388,141 @@ function getDeploymentStatus(deploymentName) {
         }
     })
     .catch(error => {
-        alert('Error: ' + error);
+        alert('Error: ' + error.message);
     });
+}
+
+// Load available regions on page load
+document.addEventListener('DOMContentLoaded', function() {
+    loadRegions();
+});
+
+function loadRegions() {
+    fetch('/api/regions')
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                populateRegionSelect(data.regions);
+            } else {
+                console.error('Error loading regions:', data.error);
+                // Fallback to hardcoded regions
+                populateRegionSelect([
+                    {name: 'East US', display_name: 'East US'},
+                    {name: 'West US', display_name: 'West US'},
+                    {name: 'West US 2', display_name: 'West US 2'},
+                    {name: 'West Europe', display_name: 'West Europe'},
+                    {name: 'East Asia', display_name: 'East Asia'}
+                ]);
+            }
+        })
+        .catch(error => {
+            console.error('Error loading regions:', error);
+            // Fallback to hardcoded regions
+            populateRegionSelect([
+                {name: 'East US', display_name: 'East US'},
+                {name: 'West US', display_name: 'West US'},
+                {name: 'West US 2', display_name: 'West US 2'},
+                {name: 'West Europe', display_name: 'West Europe'},
+                {name: 'East Asia', display_name: 'East Asia'}
+            ]);
+        });
+}
+
+function populateRegionSelect(regions) {
+    const select = document.getElementById('location');
+    select.innerHTML = '<option value="">Select a region...</option>';
+    
+    regions.forEach(region => {
+        const option = document.createElement('option');
+        option.value = region.name;
+        option.textContent = region.display_name;
+        select.appendChild(option);
+    });
+}
+
+function validateRegion() {
+    const select = document.getElementById('location');
+    const selectedRegion = select.value;
+    
+    if (!selectedRegion) {
+        hideRegionValidation();
+        return;
+    }
+    
+    showRegionValidation();
+    
+    fetch(`/api/regions/${encodeURIComponent(selectedRegion)}/validate`)
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                displayRegionCapabilities(data.capabilities);
+            } else {
+                console.error('Error validating region:', data.error);
+                hideRegionValidation();
+            }
+        })
+        .catch(error => {
+            console.error('Error validating region:', error);
+            hideRegionValidation();
+        });
+}
+
+function showRegionValidation() {
+    document.getElementById('regionValidation').style.display = 'block';
+    document.getElementById('regionCapabilities').style.display = 'none';
+}
+
+function hideRegionValidation() {
+    document.getElementById('regionValidation').style.display = 'none';
+    document.getElementById('regionCapabilities').style.display = 'none';
+}
+
+function displayRegionCapabilities(capabilities) {
+    hideRegionValidation();
+    
+    // Update status badges
+    updateStatusBadge('appServiceStatus', capabilities.app_service, 'App Service');
+    updateStatusBadge('storageStatus', capabilities.storage, 'Storage');
+    updateStatusBadge('sqlStatus', capabilities.sql_server, 'SQL Server');
+    updateStatusBadge('vnetStatus', capabilities.vnet, 'VNet');
+    
+    // Show capabilities
+    document.getElementById('regionCapabilities').style.display = 'block';
+    
+    // Add warning if not all services are available
+    if (!capabilities.overall) {
+        const warning = document.createElement('div');
+        warning.className = 'alert alert-warning mt-2';
+        warning.innerHTML = '<i class="fas fa-exclamation-triangle"></i> <strong>Warning:</strong> Not all required services are available in this region. Deployment may fail.';
+        document.getElementById('regionCapabilities').appendChild(warning);
+    }
+}
+
+function updateStatusBadge(elementId, isAvailable, serviceName) {
+    const badge = document.getElementById(elementId);
+    if (isAvailable) {
+        badge.className = 'badge bg-success';
+        badge.textContent = serviceName + ' ✓';
+    } else {
+        badge.className = 'badge bg-danger';
+        badge.textContent = serviceName + ' ✗';
+    }
+}
+
+function toggleResourceGroupInput() {
+    const select = document.getElementById('resourceGroup');
+    const inputDiv = document.getElementById('newResourceGroupInput');
+    const newNameInput = document.getElementById('newResourceGroupName');
+    
+    if (select.value === '__new__') {
+        inputDiv.style.display = 'block';
+        newNameInput.required = true;
+        newNameInput.focus();
+    } else {
+        inputDiv.style.display = 'none';
+        newNameInput.required = false;
+        newNameInput.value = '';
+    }
 }
 </script>
 {% endblock %}

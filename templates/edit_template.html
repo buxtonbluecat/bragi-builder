@@ -1,0 +1,206 @@
+{% extends "base.html" %}
+
+{% block title %}Edit {{ template_name }} - Bragi Builder{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between flex-wrap flex-md-nowrap align-items-center pt-3 pb-2 mb-3 border-bottom">
+    <h1 class="h2">
+        <i class="fas fa-edit"></i> Edit {{ template_name }}
+    </h1>
+    <div class="btn-toolbar mb-2 mb-md-0">
+        <div class="btn-group me-2">
+            <a href="{{ url_for('template_detail', template_name=template_name) }}" class="btn btn-sm btn-outline-secondary">
+                <i class="fas fa-arrow-left"></i> Back to Details
+            </a>
+            <button type="button" class="btn btn-sm btn-success" onclick="saveTemplate()">
+                <i class="fas fa-save"></i> Save
+            </button>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="card-title mb-0">Template JSON Editor</h5>
+                <div class="btn-group">
+                    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="formatJson()">
+                        <i class="fas fa-code"></i> Format
+                    </button>
+                    <button type="button" class="btn btn-sm btn-outline-info" onclick="validateTemplate()">
+                        <i class="fas fa-check"></i> Validate
+                    </button>
+                </div>
+            </div>
+            <div class="card-body">
+                <div id="validationAlert" class="alert d-none" role="alert"></div>
+                <textarea id="templateEditor" class="form-control" rows="30" style="font-family: 'Courier New', monospace;">{{ template|tojson(indent=2) }}</textarea>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Template Examples -->
+<div class="row mt-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="card-title mb-0">Template Examples</h5>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-4">
+                        <h6>Basic Structure</h6>
+                        <pre class="bg-light p-2 rounded"><code>{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {},
+  "variables": {},
+  "resources": [],
+  "outputs": {}
+}</code></pre>
+                    </div>
+                    <div class="col-md-4">
+                        <h6>Parameter Example</h6>
+                        <pre class="bg-light p-2 rounded"><code>"parameters": {
+  "location": {
+    "type": "string",
+    "defaultValue": "[resourceGroup().location]",
+    "metadata": {
+      "description": "Location for all resources"
+    }
+  }
+}</code></pre>
+                    </div>
+                    <div class="col-md-4">
+                        <h6>Resource Example</h6>
+                        <pre class="bg-light p-2 rounded"><code>"resources": [
+  {
+    "type": "Microsoft.Storage/storageAccounts",
+    "apiVersion": "2021-09-01",
+    "name": "[parameters('storageAccountName')]",
+    "location": "[parameters('location')]",
+    "sku": {
+      "name": "Standard_LRS"
+    }
+  }
+]</code></pre>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let editor = document.getElementById('templateEditor');
+let validationAlert = document.getElementById('validationAlert');
+
+function formatJson() {
+    try {
+        const json = JSON.parse(editor.value);
+        editor.value = JSON.stringify(json, null, 2);
+        showValidationAlert('JSON formatted successfully', 'success');
+    } catch (e) {
+        showValidationAlert('Invalid JSON: ' + e.message, 'danger');
+    }
+}
+
+function validateTemplate() {
+    try {
+        const template = JSON.parse(editor.value);
+        
+        // Basic validation
+        const errors = [];
+        const warnings = [];
+        
+        // Check required fields
+        if (!template.$schema) {
+            errors.push('Missing required field: $schema');
+        }
+        if (!template.contentVersion) {
+            errors.push('Missing required field: contentVersion');
+        }
+        if (!template.resources) {
+            errors.push('Missing required field: resources');
+        }
+        
+        // Check schema URL
+        if (template.$schema && !template.$schema.startsWith('https://schema.management.azure.com/')) {
+            warnings.push('Schema URL may not be valid');
+        }
+        
+        // Check resources
+        if (template.resources && !Array.isArray(template.resources)) {
+            errors.push('Resources must be an array');
+        }
+        
+        if (errors.length > 0) {
+            showValidationAlert('Validation failed:<br>' + errors.map(e => '• ' + e).join('<br>'), 'danger');
+        } else if (warnings.length > 0) {
+            showValidationAlert('Validation passed with warnings:<br>' + warnings.map(w => '• ' + w).join('<br>'), 'warning');
+        } else {
+            showValidationAlert('Template is valid!', 'success');
+        }
+        
+    } catch (e) {
+        showValidationAlert('Invalid JSON: ' + e.message, 'danger');
+    }
+}
+
+function showValidationAlert(message, type) {
+    validationAlert.className = `alert alert-${type}`;
+    validationAlert.innerHTML = message;
+    validationAlert.classList.remove('d-none');
+    
+    // Auto-hide after 5 seconds for success messages
+    if (type === 'success') {
+        setTimeout(() => {
+            validationAlert.classList.add('d-none');
+        }, 5000);
+    }
+}
+
+function saveTemplate() {
+    try {
+        const template = JSON.parse(editor.value);
+        
+        fetch(`/templates/{{ template_name }}/edit`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(template)
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                showValidationAlert('Template saved successfully!', 'success');
+            } else {
+                showValidationAlert('Error saving template: ' + data.message, 'danger');
+            }
+        })
+        .catch(error => {
+            showValidationAlert('Error saving template: ' + error, 'danger');
+        });
+        
+    } catch (e) {
+        showValidationAlert('Invalid JSON: ' + e.message, 'danger');
+    }
+}
+
+// Auto-save every 30 seconds
+setInterval(() => {
+    try {
+        JSON.parse(editor.value);
+        // Only auto-save if JSON is valid
+        saveTemplate();
+    } catch (e) {
+        // Don't auto-save invalid JSON
+    }
+}, 30000);
+</script>
+{% endblock %}

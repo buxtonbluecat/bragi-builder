@@ -1,0 +1,256 @@
+{% extends "base.html" %}
+
+{% block title %}{{ template_name }} - Bragi Builder{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between flex-wrap flex-md-nowrap align-items-center pt-3 pb-2 mb-3 border-bottom">
+    <h1 class="h2">
+        <i class="fas fa-file-code"></i> {{ template_name }}
+    </h1>
+    <div class="btn-toolbar mb-2 mb-md-0">
+        <div class="btn-group me-2">
+            <a href="{{ url_for('edit_template', template_name=template_name) }}" class="btn btn-sm btn-outline-primary">
+                <i class="fas fa-edit"></i> Edit
+            </a>
+            <button type="button" class="btn btn-sm btn-outline-success" data-bs-toggle="modal" data-bs-target="#deployModal">
+                <i class="fas fa-rocket"></i> Deploy
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- Validation Status -->
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="card-title mb-0">Validation Status</h5>
+            </div>
+            <div class="card-body">
+                {% if validation.valid %}
+                    <div class="alert alert-success">
+                        <i class="fas fa-check-circle"></i> Template is valid and ready for deployment
+                    </div>
+                {% else %}
+                    <div class="alert alert-danger">
+                        <i class="fas fa-exclamation-circle"></i> Template has validation errors
+                    </div>
+                {% endif %}
+                
+                {% if validation.errors %}
+                <div class="mb-3">
+                    <h6>Errors:</h6>
+                    <ul class="list-unstyled">
+                        {% for error in validation.errors %}
+                        <li class="text-danger">• {{ error }}</li>
+                        {% endfor %}
+                    </ul>
+                </div>
+                {% endif %}
+                
+                {% if validation.warnings %}
+                <div class="mb-3">
+                    <h6>Warnings:</h6>
+                    <ul class="list-unstyled">
+                        {% for warning in validation.warnings %}
+                        <li class="text-warning">• {{ warning }}</li>
+                        {% endfor %}
+                    </ul>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <!-- Parameters -->
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="card-title mb-0">Parameters</h5>
+            </div>
+            <div class="card-body">
+                {% if parameters %}
+                    {% for param_name, param_info in parameters.items() %}
+                    <div class="mb-3 p-3 border rounded">
+                        <div class="d-flex justify-content-between align-items-start">
+                            <div>
+                                <h6 class="mb-1">
+                                    {{ param_name }}
+                                    {% if param_info.required %}
+                                        <span class="badge bg-danger">Required</span>
+                                    {% endif %}
+                                </h6>
+                                <small class="text-muted">{{ param_info.description or 'No description' }}</small>
+                            </div>
+                            <span class="badge bg-secondary">{{ param_info.type }}</span>
+                        </div>
+                        
+                        {% if param_info.defaultValue is not none %}
+                        <div class="mt-2">
+                            <small class="text-muted">
+                                <strong>Default:</strong> {{ param_info.defaultValue }}
+                            </small>
+                        </div>
+                        {% endif %}
+                        
+                        {% if param_info.allowedValues %}
+                        <div class="mt-2">
+                            <small class="text-muted">
+                                <strong>Allowed Values:</strong> {{ param_info.allowedValues|join(', ') }}
+                            </small>
+                        </div>
+                        {% endif %}
+                    </div>
+                    {% endfor %}
+                {% else %}
+                    <p class="text-muted">No parameters defined</p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <!-- Template JSON -->
+    <div class="col-md-6">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="card-title mb-0">Template JSON</h5>
+                <button class="btn btn-sm btn-outline-secondary" onclick="copyTemplate()">
+                    <i class="fas fa-copy"></i> Copy
+                </button>
+            </div>
+            <div class="card-body">
+                <pre class="bg-light p-3 rounded" style="max-height: 400px; overflow-y: auto;"><code id="templateJson">{{ template|tojson(indent=2) }}</code></pre>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Deploy Modal -->
+<div class="modal fade" id="deployModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Deploy Template</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <form id="deployForm">
+                    <input type="hidden" name="template_name" value="{{ template_name }}">
+                    
+                    <div class="mb-3">
+                        <label for="resourceGroup" class="form-label">Resource Group</label>
+                        <input type="text" class="form-control" id="resourceGroup" name="resource_group" required>
+                        <div class="form-text">Name of the Azure resource group</div>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label for="location" class="form-label">Location</label>
+                        <select class="form-select" id="location" name="location">
+                            <option value="East US">East US</option>
+                            <option value="West US">West US</option>
+                            <option value="West Europe">West Europe</option>
+                            <option value="East Asia">East Asia</option>
+                        </select>
+                    </div>
+                    
+                    {% if parameters %}
+                    <div class="mb-3">
+                        <h6>Template Parameters</h6>
+                        {% for param_name, param_info in parameters.items() %}
+                        <div class="mb-2">
+                            <label for="param_{{ param_name }}" class="form-label">
+                                {{ param_name }}
+                                {% if param_info.required %}
+                                    <span class="text-danger">*</span>
+                                {% endif %}
+                            </label>
+                            
+                            {% if param_info.allowedValues %}
+                                <select class="form-select" id="param_{{ param_name }}" name="parameters[{{ param_name }}]">
+                                    {% for value in param_info.allowedValues %}
+                                    <option value="{{ value }}" {% if value == param_info.defaultValue %}selected{% endif %}>{{ value }}</option>
+                                    {% endfor %}
+                                </select>
+                            {% elif param_info.type == 'bool' %}
+                                <select class="form-select" id="param_{{ param_name }}" name="parameters[{{ param_name }}]">
+                                    <option value="true" {% if param_info.defaultValue == true %}selected{% endif %}>True</option>
+                                    <option value="false" {% if param_info.defaultValue == false %}selected{% endif %}>False</option>
+                                </select>
+                            {% else %}
+                                <input type="text" class="form-control" id="param_{{ param_name }}" 
+                                       name="parameters[{{ param_name }}]" 
+                                       value="{{ param_info.defaultValue or '' }}"
+                                       {% if param_info.required %}required{% endif %}>
+                            {% endif %}
+                            
+                            {% if param_info.description %}
+                            <div class="form-text">{{ param_info.description }}</div>
+                            {% endif %}
+                        </div>
+                        {% endfor %}
+                    </div>
+                    {% endif %}
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" onclick="deployTemplate()">Deploy Template</button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function copyTemplate() {
+    const templateJson = document.getElementById('templateJson').textContent;
+    navigator.clipboard.writeText(templateJson).then(function() {
+        alert('Template copied to clipboard!');
+    });
+}
+
+function deployTemplate() {
+    const form = document.getElementById('deployForm');
+    const formData = new FormData(form);
+    
+    // Convert FormData to object
+    const data = {
+        template_name: formData.get('template_name'),
+        resource_group: formData.get('resource_group'),
+        location: formData.get('location'),
+        parameters: {}
+    };
+    
+    // Add parameters
+    for (const [key, value] of formData.entries()) {
+        if (key.startsWith('parameters[')) {
+            const paramName = key.match(/parameters\[(.*?)\]/)[1];
+            data.parameters[paramName] = value;
+        }
+    }
+    
+    fetch('/deploy', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(data)
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            alert('Deployment started successfully!');
+            window.location.href = '/deployments';
+        } else {
+            alert('Error: ' + data.message);
+        }
+    })
+    .catch(error => {
+        alert('Error: ' + error);
+    });
+}
+</script>
+{% endblock %}

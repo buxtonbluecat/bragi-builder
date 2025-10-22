@@ -1,0 +1,35 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {},
+  "variables": {
+    "resourceId": "[resourceId('Microsoft.Storage/storageAccounts', 'resource')]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Web/serverfarms",
+      "apiVersion": "2021-02-01",
+      "name": "resource",
+      "location": "North Europe",
+      "properties": {
+        "reserved": true
+      },
+      "sku": "B1",
+      "kind": "windows"
+    },
+    {
+      "type": "Microsoft.Storage/storageAccounts",
+      "apiVersion": "2021-09-01",
+      "name": "resource",
+      "location": "North Europe",
+      "properties": {
+        "supportsHttpsTrafficOnly": true,
+        "minimumTlsVersion": "TLS1_2",
+        "allowBlobPublicAccess": false
+      },
+      "sku": "Standard_LRS",
+      "kind": "windows"
+    }
+  ],
+  "outputs": {}
+}

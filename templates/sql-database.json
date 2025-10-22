@@ -1,0 +1,89 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "sqlServerName": {
+      "type": "string",
+      "metadata": {
+        "description": "Name of the SQL Server"
+      }
+    },
+    "databaseName": {
+      "type": "string",
+      "metadata": {
+        "description": "Name of the SQL Database"
+      }
+    },
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]",
+      "metadata": {
+        "description": "Location for all resources"
+      }
+    },
+    "sku": {
+      "type": "string",
+      "defaultValue": "Basic",
+      "allowedValues": [
+        "Basic",
+        "S0",
+        "S1",
+        "S2",
+        "S3",
+        "P1",
+        "P2",
+        "P4",
+        "P6",
+        "P11",
+        "P15"
+      ],
+      "metadata": {
+        "description": "The pricing tier for the SQL Database"
+      }
+    },
+    "maxSizeBytes": {
+      "type": "int",
+      "defaultValue": 2147483648,
+      "metadata": {
+        "description": "The maximum size of the database in bytes"
+      }
+    },
+    "collation": {
+      "type": "string",
+      "defaultValue": "SQL_Latin1_General_CP1_CI_AS",
+      "metadata": {
+        "description": "The collation of the database"
+      }
+    }
+  },
+  "variables": {
+    "sqlServerName": "[toLower(parameters('sqlServerName'))]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Sql/servers/databases",
+      "apiVersion": "2021-11-01",
+      "name": "[concat(variables('sqlServerName'), '/', parameters('databaseName'))]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "collation": "[parameters('collation')]",
+        "maxSizeBytes": "[parameters('maxSizeBytes')]",
+        "requestedServiceObjectiveName": "[parameters('sku')]"
+      }
+    }
+  ],
+  "outputs": {
+    "databaseName": {
+      "type": "string",
+      "value": "[parameters('databaseName')]"
+    },
+    "databaseId": {
+      "type": "string",
+      "value": "[resourceId('Microsoft.Sql/servers/databases', variables('sqlServerName'), parameters('databaseName'))]"
+    },
+    "connectionString": {
+      "type": "string",
+      "value": "[concat('Server=tcp:', reference(resourceId('Microsoft.Sql/servers', variables('sqlServerName'))).fullyQualifiedDomainName, ',1433;Initial Catalog=', parameters('databaseName'), ';Persist Security Info=False;User ID={your_username};Password={your_password};MultipleActiveResultSets=False;Encrypt=True;TrustServerCertificate=False;Connection Timeout=30;')]"
+    }
+  }
+}

@@ -1,0 +1,129 @@
+{% extends "base.html" %}
+
+{% block title %}Templates - Bragi Builder{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between flex-wrap flex-md-nowrap align-items-center pt-3 pb-2 mb-3 border-bottom">
+    <h1 class="h2">Templates</h1>
+    <div class="btn-toolbar mb-2 mb-md-0">
+        <div class="btn-group me-2">
+            <button type="button" class="btn btn-sm btn-outline-secondary" onclick="location.reload()">
+                <i class="fas fa-sync-alt"></i> Refresh
+            </button>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    {% for template_name in templates %}
+    <div class="col-md-6 col-lg-4 mb-4">
+        <div class="card template-card h-100">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="card-title mb-0">
+                    <i class="fas fa-file-code"></i> {{ template_name }}
+                </h5>
+                <div class="dropdown">
+                    <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown">
+                        <i class="fas fa-ellipsis-v"></i>
+                    </button>
+                    <ul class="dropdown-menu">
+                        <li><a class="dropdown-item" href="{{ url_for('template_detail', template_name=template_name) }}">
+                            <i class="fas fa-eye"></i> View
+                        </a></li>
+                        <li><a class="dropdown-item" href="{{ url_for('edit_template', template_name=template_name) }}">
+                            <i class="fas fa-edit"></i> Edit
+                        </a></li>
+                    </ul>
+                </div>
+            </div>
+            <div class="card-body">
+                {% set details = template_details.get(template_name, {}) %}
+                {% set validation = details.get('validation', {}) %}
+                {% set parameters = details.get('parameters', {}) %}
+                
+                <!-- Validation Status -->
+                <div class="mb-3">
+                    {% if validation.get('valid', False) %}
+                        <span class="badge bg-success">
+                            <i class="fas fa-check"></i> Valid
+                        </span>
+                    {% else %}
+                        <span class="badge bg-danger">
+                            <i class="fas fa-times"></i> Invalid
+                        </span>
+                    {% endif %}
+                    
+                    {% if validation.get('warnings') %}
+                        <span class="badge bg-warning">
+                            <i class="fas fa-exclamation-triangle"></i> {{ validation.warnings|length }} Warnings
+                        </span>
+                    {% endif %}
+                </div>
+                
+                <!-- Parameters Count -->
+                <div class="mb-3">
+                    <small class="text-muted">
+                        <i class="fas fa-cog"></i> {{ parameters|length }} Parameters
+                    </small>
+                </div>
+                
+                <!-- Required Parameters -->
+                {% set required_params = parameters.values()|selectattr('required', 'equalto', true)|list %}
+                {% if required_params %}
+                <div class="mb-3">
+                    <small class="text-muted">
+                        <i class="fas fa-asterisk"></i> {{ required_params|length }} Required
+                    </small>
+                </div>
+                {% endif %}
+                
+                <!-- Validation Errors -->
+                {% if validation.get('errors') %}
+                <div class="alert alert-danger alert-sm">
+                    <small>
+                        <strong>Errors:</strong><br>
+                        {% for error in validation.errors[:3] %}
+                            • {{ error }}<br>
+                        {% endfor %}
+                        {% if validation.errors|length > 3 %}
+                            ... and {{ validation.errors|length - 3 }} more
+                        {% endif %}
+                    </small>
+                </div>
+                {% endif %}
+                
+                <!-- Validation Warnings -->
+                {% if validation.get('warnings') %}
+                <div class="alert alert-warning alert-sm">
+                    <small>
+                        <strong>Warnings:</strong><br>
+                        {% for warning in validation.warnings[:2] %}
+                            • {{ warning }}<br>
+                        {% endfor %}
+                        {% if validation.warnings|length > 2 %}
+                            ... and {{ validation.warnings|length - 2 }} more
+                        {% endif %}
+                    </small>
+                </div>
+                {% endif %}
+            </div>
+            <div class="card-footer">
+                <div class="d-grid gap-2 d-md-flex justify-content-md-end">
+                    <a href="{{ url_for('template_detail', template_name=template_name) }}" class="btn btn-primary btn-sm">
+                        <i class="fas fa-eye"></i> View Details
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+
+{% if not templates %}
+<div class="text-center py-5">
+    <i class="fas fa-file-code fa-3x text-muted mb-3"></i>
+    <h3 class="text-muted">No Templates Found</h3>
+    <p class="text-muted">Templates will appear here once they are created.</p>
+</div>
+{% endif %}
+{% endblock %}

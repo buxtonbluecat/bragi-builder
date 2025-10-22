@@ -1,0 +1,10 @@
+flask==2.3.3
+azure-identity==1.15.0
+azure-mgmt-resource==23.0.1
+azure-mgmt-web==7.0.0
+azure-mgmt-storage==21.0.0
+azure-mgmt-sql==3.0.1
+pyyaml==6.0.1
+jinja2==3.1.2
+click==8.1.7
+python-dotenv==1.0.0

@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Bragi Builder{% endblock %}</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        .sidebar {
+            min-height: 100vh;
+            background-color: #f8f9fa;
+        }
+        .main-content {
+            padding: 2rem;
+        }
+        .status-badge {
+            font-size: 0.8rem;
+        }
+        .template-card {
+            transition: transform 0.2s;
+        }
+        .template-card:hover {
+            transform: translateY(-2px);
+        }
+        .deployment-item {
+            border-left: 4px solid #dee2e6;
+            padding-left: 1rem;
+        }
+        .deployment-item.succeeded {
+            border-left-color: #28a745;
+        }
+        .deployment-item.failed {
+            border-left-color: #dc3545;
+        }
+        .deployment-item.running {
+            border-left-color: #ffc107;
+        }
+    </style>
+</head>
+<body>
+    <div class="container-fluid">
+        <div class="row">
+            <!-- Sidebar -->
+            <nav class="col-md-3 col-lg-2 d-md-block sidebar collapse">
+                <div class="position-sticky pt-3">
+                    <div class="text-center mb-4">
+                        <h4><i class="fas fa-cloud"></i> Bragi Builder</h4>
+                        <small class="text-muted">Azure ARM Template Manager</small>
+                    </div>
+                    
+                    <ul class="nav flex-column">
+                        <li class="nav-item">
+                            <a class="nav-link {% if request.endpoint == 'index' %}active{% endif %}" href="{{ url_for('index') }}">
+                                <i class="fas fa-tachometer-alt"></i> Dashboard
+                            </a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link {% if request.endpoint == 'templates' %}active{% endif %}" href="{{ url_for('templates') }}">
+                                <i class="fas fa-file-code"></i> Templates
+                            </a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link {% if request.endpoint == 'deployments' %}active{% endif %}" href="{{ url_for('deployments') }}">
+                                <i class="fas fa-rocket"></i> Deployments
+                            </a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link {% if request.endpoint == 'offline_review_page' %}active{% endif %}" href="{{ url_for('offline_review_page') }}">
+                                <i class="fas fa-search"></i> Offline Review
+                            </a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link {% if request.endpoint == 'template_wizard_page' %}active{% endif %}" href="{{ url_for('template_wizard_page') }}">
+                                <i class="fas fa-magic"></i> Template Wizard
+                            </a>
+                        </li>
+                    </ul>
+                    
+                    <hr>
+                    
+                    <div class="px-3">
+                        <h6 class="sidebar-heading d-flex justify-content-between align-items-center px-3 mt-4 mb-1 text-muted">
+                            <span>Quick Deploy</span>
+                        </h6>
+                        <div class="d-grid gap-2">
+                            <button class="btn btn-outline-primary btn-sm" data-bs-toggle="modal" data-bs-target="#deployEnvironmentModal">
+                                <i class="fas fa-plus"></i> New Environment
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </nav>
+
+            <!-- Main content -->
+            <main class="col-md-9 ms-sm-auto col-lg-10 px-md-4 main-content">
+                <!-- Flash messages -->
+                {% with messages = get_flashed_messages(with_categories=true) %}
+                    {% if messages %}
+                        {% for category, message in messages %}
+                            <div class="alert alert-{{ 'danger' if category == 'error' else category }} alert-dismissible fade show" role="alert">
+                                {{ message }}
+                                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                            </div>
+                        {% endfor %}
+                    {% endif %}
+                {% endwith %}
+
+                {% block content %}{% endblock %}
+            </main>
+        </div>
+    </div>
+
+    <!-- Deploy Environment Modal -->
+    <div class="modal fade" id="deployEnvironmentModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Deploy New Environment</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <form id="deployEnvironmentForm">
+                        <div class="mb-3">
+                            <label for="environment" class="form-label">Environment</label>
+                            <select class="form-select" id="environment" name="environment" required>
+                                <option value="dev">Development</option>
+                                <option value="sit">SIT</option>
+                                <option value="uat">UAT</option>
+                                <option value="pre-prod">Pre-Production</option>
+                                <option value="prod">Production</option>
+                            </select>
+                        </div>
+                        <div class="mb-3">
+                            <label for="projectName" class="form-label">Project Name</label>
+                            <input type="text" class="form-control" id="projectName" name="project_name" value="bragi" required>
+                        </div>
+                        <div class="mb-3">
+                            <label for="location" class="form-label">Location</label>
+                            <select class="form-select" id="location" name="location">
+                                <option value="East US">East US</option>
+                                <option value="West US">West US</option>
+                                <option value="West Europe">West Europe</option>
+                                <option value="East Asia">East Asia</option>
+                            </select>
+                        </div>
+                        <div class="mb-3">
+                            <label for="sqlPassword" class="form-label">SQL Administrator Password</label>
+                            <input type="password" class="form-control" id="sqlPassword" name="sql_password" required>
+                            <div class="form-text">Password for the SQL Server administrator account</div>
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn btn-primary" onclick="deployEnvironment()">Deploy Environment</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        function deployEnvironment() {
+            const form = document.getElementById('deployEnvironmentForm');
+            const formData = new FormData(form);
+            const data = Object.fromEntries(formData);
+            
+            fetch('/deploy-environment', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(data)
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    alert('Environment deployment started successfully!');
+                    location.reload();
+                } else {
+                    alert('Error: ' + data.message);
+                }
+            })
+            .catch(error => {
+                alert('Error: ' + error);
+            });
+        }
+    </script>
+    {% block scripts %}{% endblock %}
+</body>
+</html>

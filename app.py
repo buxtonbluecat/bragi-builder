@@ -15,6 +15,7 @@ from src.deployment_manager import DeploymentManager
 from src.offline_review import OfflineReviewManager
 from src.workload_config import WorkloadConfigManager
 from src.template_wizard import TemplateWizard
+from src.vnet_validator import VNetValidator
 
 # Load environment variables
 load_dotenv()
@@ -48,6 +49,10 @@ deployment_statuses = {}
 def monitor_deployment_status(deployment_name, resource_group_name):
     """Monitor deployment status and emit updates via WebSocket"""
     try:
+        start_time = time.time()
+        last_status = None
+        status_count = 0
+        
         while True:
             if deployment_name not in deployment_statuses:
                 break
@@ -56,27 +61,73 @@ def monitor_deployment_status(deployment_name, resource_group_name):
             status = azure_client.get_deployment_status(resource_group_name, deployment_name)
             
             if status:
-                # Update our tracking
-                deployment_statuses[deployment_name]['status'] = status['provisioning_state']
-                deployment_statuses[deployment_name]['timestamp'] = status['timestamp'].isoformat()
+                current_status = status['provisioning_state']
+                current_time = status['timestamp']
+                elapsed_time = int(time.time() - start_time)
                 
-                # Emit update to all connected clients
-                socketio.emit('deployment_update', {
-                    'deployment_name': deployment_name,
-                    'status': status['provisioning_state'],
-                    'timestamp': status['timestamp'].isoformat(),
-                    'outputs': status.get('outputs', {})
-                })
+                # Create more informative status message
+                status_message = get_detailed_status_message(current_status, elapsed_time)
+                
+                # Update our tracking
+                deployment_statuses[deployment_name]['status'] = current_status
+                deployment_statuses[deployment_name]['timestamp'] = current_time.isoformat()
+                deployment_statuses[deployment_name]['elapsed_time'] = elapsed_time
+                deployment_statuses[deployment_name]['status_message'] = status_message
+                
+                # Only emit if status changed or every 30 seconds
+                if current_status != last_status or status_count % 6 == 0:
+                    socketio.emit('deployment_update', {
+                        'deployment_name': deployment_name,
+                        'status': current_status,
+                        'status_message': status_message,
+                        'timestamp': current_time.isoformat(),
+                        'elapsed_time': elapsed_time,
+                        'outputs': status.get('outputs', {})
+                    })
+                    last_status = current_status
+                
+                status_count += 1
                 
                 # If deployment is complete (success or failed), stop monitoring
-                if status['provisioning_state'] in ['Succeeded', 'Failed', 'Canceled']:
+                if current_status in ['Succeeded', 'Failed', 'Canceled']:
                     deployment_statuses[deployment_name]['completed'] = True
+                    
+                    # Get detailed error information if failed
+                    error_details = None
+                    if current_status == 'Failed':
+                        try:
+                            error_result = deployment_manager.get_deployment_errors(deployment_name, resource_group_name)
+                            if error_result.get('success'):
+                                error_details = error_result.get('errors', [])
+                                print(f"Deployment {deployment_name} failed with {len(error_details)} error(s)")
+                        except Exception as e:
+                            print(f"Could not get error details: {e}")
+                    
+                    # Send final status update
+                    final_update = {
+                        'deployment_name': deployment_name,
+                        'status': current_status,
+                        'status_message': get_detailed_status_message(current_status, elapsed_time, final=True),
+                        'timestamp': current_time.isoformat(),
+                        'elapsed_time': elapsed_time,
+                        'outputs': status.get('outputs', {}),
+                        'completed': True
+                    }
+                    
+                    if error_details:
+                        final_update['error_details'] = error_details
+                    
+                    socketio.emit('deployment_update', final_update)
                     break
             else:
                 # Deployment not found, stop monitoring
+                socketio.emit('deployment_error', {
+                    'deployment_name': deployment_name,
+                    'error': 'Deployment not found in Azure'
+                })
                 break
                 
-            time.sleep(5)  # Check every 5 seconds
+            time.sleep(10)  # Check every 10 seconds as requested
             
     except Exception as e:
         print(f"Error monitoring deployment {deployment_name}: {e}")
@@ -88,6 +139,26 @@ def monitor_deployment_status(deployment_name, resource_group_name):
         # Clean up
         if deployment_name in deployment_statuses:
             del deployment_statuses[deployment_name]
+
+
+def get_detailed_status_message(status, elapsed_time, final=False):
+    """Generate detailed status messages for deployments"""
+    minutes = elapsed_time // 60
+    seconds = elapsed_time % 60
+    time_str = f"{minutes}m {seconds}s" if minutes > 0 else f"{seconds}s"
+    
+    status_messages = {
+        'Accepted': f'Deployment accepted and queued ({time_str})',
+        'Running': f'Deployment in progress ({time_str})',
+        'Creating': f'Creating resources ({time_str})',
+        'Updating': f'Updating resources ({time_str})',
+        'Deleting': f'Deleting resources ({time_str})',
+        'Succeeded': f'Deployment completed successfully ({time_str})' if final else f'Deployment succeeded ({time_str})',
+        'Failed': f'Deployment failed ({time_str})' if final else f'Deployment failed ({time_str})',
+        'Canceled': f'Deployment canceled ({time_str})' if final else f'Deployment canceled ({time_str})'
+    }
+    
+    return status_messages.get(status, f'Status: {status} ({time_str})')
 
 
 @app.route('/')
@@ -224,11 +295,35 @@ def deploy():
         if not template_name or not resource_group:
             return jsonify({"success": False, "message": "Template name and resource group are required"}), 400
         
+        # Validate resource group name if it's a new resource group
+        if resource_group.startswith('__new__') or not azure_client.get_resource_group(resource_group):
+            # If it's a new resource group, validate the name
+            if resource_group.startswith('__new__'):
+                new_rg_name = data.get('new_resource_group_name', '').strip()
+                if not new_rg_name:
+                    return jsonify({"success": False, "message": "New resource group name is required"}), 400
+                resource_group = new_rg_name
+            
+            # Validate the resource group name
+            validation = azure_client.validate_resource_group_name(resource_group)
+            if not validation["is_valid"]:
+                return jsonify({
+                    "success": False, 
+                    "message": f"Resource group validation failed: {validation['error']}",
+                    "suggestion": validation.get("suggestion", "")
+                }), 400
+        
         # Check if resource group exists, create if not
         rg = azure_client.get_resource_group(resource_group)
         if not rg:
             location = data.get('location', 'East US')
-            azure_client.create_resource_group(resource_group, location)
+            # Add Bragi tags for manual deployments
+            tags = {
+                "Environment": "Manual",
+                "DeploymentType": "Manual Template",
+                "TemplateName": template_name
+            }
+            azure_client.create_resource_group(resource_group, location, tags)
         
         # Deploy the template
         result = deployment_manager.deploy_template(
@@ -292,6 +387,16 @@ def deploy_environment():
         if not environment or not sql_password:
             return jsonify({"success": False, "message": "Environment and SQL password are required"}), 400
         
+        # Validate resource group name before creating
+        resource_group_name = f"{project_name}-{environment}-rg"
+        validation = azure_client.validate_resource_group_name(resource_group_name)
+        if not validation["is_valid"]:
+            return jsonify({
+                "success": False, 
+                "message": f"Resource group validation failed: {validation['error']}",
+                "suggestion": validation.get("suggestion", "")
+            }), 400
+        
         result = deployment_manager.create_environment_deployment(
             environment=environment,
             project_name=project_name,
@@ -323,14 +428,73 @@ def environment_resources(environment):
 def environment_endpoints(environment):
     """Get public-facing endpoints for an environment"""
     if not deployment_manager:
-        return jsonify({"error": "Azure client not configured"}), 400
+        flash("Azure client not configured", "error")
+        return redirect(url_for('environments_page'))
     
     try:
         project_name = request.args.get('project_name', 'bragi')
-        endpoints = deployment_manager.get_environment_endpoints(environment, project_name)
-        return jsonify(endpoints)
+        specified_rg = request.args.get('resource_group')
+        
+        target_rg_name = None
+        
+        if specified_rg:
+            # Use the specified resource group if provided
+            target_rg_name = specified_rg
+        else:
+            # Find the actual resource group name by looking for Bragi-managed resource groups
+            # that match the environment and project
+            resource_groups = azure_client.list_resource_groups()
+            
+            for rg in resource_groups:
+                if rg.tags and rg.tags.get('CreatedBy') == 'Bragi Builder':
+                    rg_project = rg.tags.get('Project', '')
+                    rg_environment = rg.tags.get('Environment', '')
+                    
+                    # Match by project and environment from tags
+                    if (rg_project.lower() == project_name.lower() and 
+                        rg_environment.lower() == environment.lower()):
+                        target_rg_name = rg.name
+                        break
+        
+        if not target_rg_name:
+            flash(f"Environment {environment} not found", "error")
+            return redirect(url_for('environments_page'))
+        
+        endpoints = deployment_manager.get_environment_endpoints(environment, project_name, target_rg_name)
+        
+        return render_template('endpoints.html',
+                             environment=environment,
+                             project_name=project_name,
+                             resource_group_name=target_rg_name,
+                             endpoints=endpoints)
     except Exception as e:
-        return jsonify({"error": str(e)}), 400
+        flash(f"Error loading endpoints: {str(e)}", "error")
+        return redirect(url_for('environments_page'))
+
+
+@app.route('/resource-groups')
+def get_resource_groups():
+    """Get all resource groups"""
+    if not azure_client:
+        return jsonify({"success": False, "message": "Azure client not configured"}), 400
+    
+    try:
+        resource_groups = azure_client.list_resource_groups()
+        # Serialize ResourceGroup objects to dictionaries
+        serialized_groups = []
+        for rg in resource_groups:
+            serialized_groups.append({
+                "name": rg.name,
+                "location": rg.location,
+                "id": rg.id,
+                "tags": rg.tags if rg.tags else {},
+                "properties": {
+                    "provisioning_state": rg.properties.provisioning_state if rg.properties else None
+                }
+            })
+        return jsonify({"success": True, "resource_groups": serialized_groups})
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 400
 
 
 @app.route('/environments')
@@ -365,6 +529,72 @@ def validate_region(region):
         return jsonify({"success": False, "error": str(e)}), 400
 
 
+@app.route('/api/vnet/validate')
+def validate_vnet_address_space():
+    """Validate VNet address space for overlaps"""
+    if not azure_client:
+        return jsonify({"success": False, "message": "Azure client not configured"}), 400
+    
+    try:
+        address_space = request.args.get('address_space')
+        location = request.args.get('location')
+        
+        if not address_space:
+            return jsonify({"success": False, "message": "address_space parameter is required"}), 400
+        
+        # Initialize VNet validator with existing Azure client
+        vnet_validator = VNetValidator(azure_client)
+        
+        # Validate the address space
+        validation_result = vnet_validator.check_address_space_overlap(address_space, location)
+        
+        return jsonify({
+            "success": True,
+            "validation": validation_result
+        })
+        
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 400
+
+
+@app.route('/api/vnet/common-spaces')
+def get_common_address_spaces():
+    """Get commonly used VNet address spaces"""
+    try:
+        vnet_validator = VNetValidator(azure_client)
+        common_spaces = vnet_validator.get_common_address_spaces()
+        
+        return jsonify({
+            "success": True,
+            "common_spaces": common_spaces
+        })
+        
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 400
+
+
+@app.route('/api/resource-groups/validate')
+def validate_resource_group_name():
+    """Validate resource group name availability"""
+    if not azure_client:
+        return jsonify({"success": False, "message": "Azure client not configured"}), 400
+    
+    try:
+        name = request.args.get('name')
+        if not name:
+            return jsonify({"success": False, "message": "name parameter is required"}), 400
+        
+        validation_result = azure_client.validate_resource_group_name(name)
+        
+        return jsonify({
+            "success": True,
+            "validation": validation_result
+        })
+        
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 400
+
+
 @app.route('/environments/<environment>', methods=['DELETE'])
 def delete_environment(environment):
     """Delete an environment"""
@@ -373,15 +603,104 @@ def delete_environment(environment):
     
     try:
         project_name = request.args.get('project_name', 'bragi')
-        success = deployment_manager.delete_environment(environment, project_name)
         
-        if success:
-            return jsonify({"success": True, "message": f"Environment {environment} deletion started"})
-        else:
+        # Find the actual resource group name by looking for Bragi-managed resource groups
+        # that match the environment and project
+        resource_groups = azure_client.list_resource_groups()
+        target_rg_name = None
+        
+        for rg in resource_groups:
+            if rg.tags and rg.tags.get('CreatedBy') == 'Bragi Builder':
+                rg_project = rg.tags.get('Project', '')
+                rg_environment = rg.tags.get('Environment', '')
+                
+                # Match by project and environment from tags
+                if (rg_project.lower() == project_name.lower() and 
+                    rg_environment.lower() == environment.lower()):
+                    target_rg_name = rg.name
+                    break
+        
+        if not target_rg_name:
             return jsonify({"success": False, "message": f"Environment {environment} not found"}), 404
+        
+        result = deployment_manager.delete_environment(environment, project_name, target_rg_name)
+        
+        if result["success"]:
+            return jsonify(result)
+        else:
+            return jsonify(result), 500
             
     except Exception as e:
         return jsonify({"success": False, "message": str(e)}), 400
+
+@app.route('/api/delete-progress/<resource_group>')
+def check_delete_progress(resource_group):
+    """Check the progress of a resource group deletion"""
+    if not deployment_manager:
+        return jsonify({"success": False, "message": "Azure client not configured"}), 400
+    
+    try:
+        result = deployment_manager.check_delete_progress(resource_group)
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
+
+@app.route('/api/deployment-resources/<deployment_name>')
+def get_deployment_resources(deployment_name):
+    """Get detailed resource status for a deployment"""
+    if not azure_client:
+        return jsonify({"success": False, "message": "Azure client not configured"}), 400
+    
+    try:
+        resource_group = request.args.get('resource_group')
+        if not resource_group:
+            return jsonify({
+                "success": False,
+                "message": "Resource group parameter is required"
+            }), 400
+        
+        # Get deployment operations to see individual resource status
+        operations = azure_client.resource_client.deployment_operations.list(
+            resource_group, deployment_name
+        )
+        
+        resources = []
+        for operation in operations:
+            if hasattr(operation.properties, 'target_resource') and operation.properties.target_resource:
+                resource_info = {
+                    "name": operation.properties.target_resource.resource_name,
+                    "type": operation.properties.target_resource.resource_type,
+                    "status": operation.properties.provisioning_state,
+                    "operationId": operation.operation_id,
+                    "timestamp": operation.properties.timestamp.isoformat() if operation.properties.timestamp else None
+                }
+                
+                # Add status message if available
+                if hasattr(operation.properties, 'status_message') and operation.properties.status_message:
+                    # Convert StatusMessage object to string
+                    status_msg = operation.properties.status_message
+                    if hasattr(status_msg, 'error') and status_msg.error:
+                        resource_info["message"] = str(status_msg.error)
+                    elif hasattr(status_msg, 'status') and status_msg.status:
+                        resource_info["message"] = str(status_msg.status)
+                    else:
+                        resource_info["message"] = str(status_msg)
+                
+                resources.append(resource_info)
+        
+        return jsonify({
+            "success": True,
+            "deployment_name": deployment_name,
+            "resource_group": resource_group,
+            "resources": resources,
+            "total_resources": len(resources)
+        })
+        
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "message": f"Error getting deployment resources: {str(e)}"
+        }), 500
 
 
 # Offline Review Routes

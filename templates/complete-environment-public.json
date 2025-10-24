@@ -1,0 +1,606 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "environment": {
+      "type": "string",
+      "defaultValue": "dev",
+      "allowedValues": [
+        "dev",
+        "sit",
+        "uat",
+        "pre-prod",
+        "prod"
+      ],
+      "metadata": {
+        "description": "Environment name"
+      }
+    },
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]",
+      "metadata": {
+        "description": "Location for all resources"
+      }
+    },
+    "projectName": {
+      "type": "string",
+      "defaultValue": "bragi",
+      "metadata": {
+        "description": "Project name prefix"
+      }
+    },
+    "sqlAdministratorLogin": {
+      "type": "string",
+      "defaultValue": "sqladmin",
+      "metadata": {
+        "description": "SQL Server administrator login"
+      }
+    },
+    "sqlAdministratorLoginPassword": {
+      "type": "securestring",
+      "metadata": {
+        "description": "SQL Server administrator password"
+      }
+    },
+    "appServiceSku": {
+      "type": "string",
+      "defaultValue": "B1",
+      "allowedValues": [
+        "F1",
+        "B1",
+        "B2",
+        "B3",
+        "S1",
+        "S2",
+        "S3",
+        "P1",
+        "P2",
+        "P3",
+        "P4"
+      ],
+      "metadata": {
+        "description": "App Service plan SKU"
+      }
+    },
+    "sqlDatabaseSku": {
+      "type": "string",
+      "defaultValue": "Basic",
+      "allowedValues": [
+        "Basic",
+        "S0",
+        "S1",
+        "S2",
+        "S3",
+        "P1",
+        "P2",
+        "P4",
+        "P6",
+        "P11",
+        "P15"
+      ],
+      "metadata": {
+        "description": "SQL Database SKU"
+      }
+    },
+    "storageSku": {
+      "type": "string",
+      "defaultValue": "Standard_LRS",
+      "allowedValues": [
+        "Standard_LRS",
+        "Standard_GRS",
+        "Standard_RAGRS",
+        "Standard_ZRS",
+        "Premium_LRS"
+      ],
+      "metadata": {
+        "description": "Storage account SKU"
+      }
+    },
+    "enablePublicNetworkAccess": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "Enable public network access for resources"
+      }
+    },
+    "allowedClientIPs": {
+      "type": "string",
+      "defaultValue": "0.0.0.0-255.255.255.255",
+      "metadata": {
+        "description": "Comma-separated list of allowed client IP ranges for SQL Server (e.g., '1.2.3.4,5.6.7.8-5.6.7.10')"
+      }
+    }
+  },
+  "variables": {
+    "resourceGroupName": "[resourceGroup().name]",
+    "uniqueSuffix": "[substring(uniqueString(resourceGroup().id), 0, 6)]",
+    "cleanResourceGroupName": "[toLower(replace(replace(variables('resourceGroupName'), '_', ''), '-', ''))]",
+    "vnetName": "[concat(variables('cleanResourceGroupName'), 'vnet')]",
+    "addressPrefix": "10.0.0.0/16",
+    "appServiceSubnetPrefix": "10.0.1.0/24",
+    "databaseSubnetPrefix": "10.0.2.0/24",
+    "storageSubnetPrefix": "10.0.3.0/24",
+    "managementSubnetPrefix": "10.0.4.0/24",
+    "gatewaySubnetPrefix": "10.0.5.0/24",
+    "appServicePlanName": "[concat(variables('cleanResourceGroupName'), 'asp')]",
+    "appServiceName": "[concat(take(variables('cleanResourceGroupName'), 20), 'app')]",
+    "storageAccountName": "[concat(take(variables('cleanResourceGroupName'), 15), variables('uniqueSuffix'), 'stg')]",
+    "sqlServerName": "[concat(take(variables('cleanResourceGroupName'), 20), 'sql')]",
+    "sqlDatabaseName": "[concat(take(variables('cleanResourceGroupName'), 20), 'db')]",
+    "sqlDWHName": "[concat(take(variables('cleanResourceGroupName'), 20), 'dwh')]",
+    "publicIPName": "[concat(variables('cleanResourceGroupName'), 'pip')]",
+    "applicationGatewayName": "[concat(variables('cleanResourceGroupName'), 'agw')]",
+    "nsgName": "[concat(variables('cleanResourceGroupName'), 'nsg')]",
+    "gatewaySubnetName": "gateway-subnet",
+    "appServiceSubnetName": "app-service-subnet",
+    "databaseSubnetName": "database-subnet",
+    "storageSubnetName": "storage-subnet",
+    "managementSubnetName": "management-subnet"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Network/virtualNetworks",
+      "apiVersion": "2021-05-01",
+      "name": "[variables('vnetName')]",
+      "location": "[parameters('location')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/networkSecurityGroups', variables('nsgName'))]"
+      ],
+      "properties": {
+        "addressSpace": {
+          "addressPrefixes": [
+            "[variables('addressPrefix')]"
+          ]
+        },
+        "subnets": [
+          {
+            "name": "[variables('gatewaySubnetName')]",
+            "properties": {
+              "addressPrefix": "[variables('gatewaySubnetPrefix')]"
+            }
+          },
+          {
+            "name": "[variables('appServiceSubnetName')]",
+            "properties": {
+              "addressPrefix": "[variables('appServiceSubnetPrefix')]",
+              "delegations": [
+                {
+                  "name": "Microsoft.Web.serverFarms",
+                  "properties": {
+                    "serviceName": "Microsoft.Web/serverFarms"
+                  }
+                }
+              ],
+              "networkSecurityGroup": {
+                "id": "[resourceId('Microsoft.Network/networkSecurityGroups', variables('nsgName'))]"
+              }
+            }
+          },
+          {
+            "name": "[variables('databaseSubnetName')]",
+            "properties": {
+              "addressPrefix": "[variables('databaseSubnetPrefix')]",
+              "networkSecurityGroup": {
+                "id": "[resourceId('Microsoft.Network/networkSecurityGroups', variables('nsgName'))]"
+              }
+            }
+          },
+          {
+            "name": "[variables('storageSubnetName')]",
+            "properties": {
+              "addressPrefix": "[variables('storageSubnetPrefix')]",
+              "networkSecurityGroup": {
+                "id": "[resourceId('Microsoft.Network/networkSecurityGroups', variables('nsgName'))]"
+              }
+            }
+          },
+          {
+            "name": "[variables('managementSubnetName')]",
+            "properties": {
+              "addressPrefix": "[variables('managementSubnetPrefix')]",
+              "networkSecurityGroup": {
+                "id": "[resourceId('Microsoft.Network/networkSecurityGroups', variables('nsgName'))]"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "Microsoft.Network/networkSecurityGroups",
+      "apiVersion": "2021-05-01",
+      "name": "[variables('nsgName')]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "securityRules": [
+          {
+            "name": "AllowHTTPS",
+            "properties": {
+              "priority": 1000,
+              "protocol": "Tcp",
+              "access": "Allow",
+              "direction": "Inbound",
+              "sourceAddressPrefix": "*",
+              "sourcePortRange": "*",
+              "destinationAddressPrefix": "*",
+              "destinationPortRange": "443"
+            }
+          },
+          {
+            "name": "AllowHTTP",
+            "properties": {
+              "priority": 1010,
+              "protocol": "Tcp",
+              "access": "Allow",
+              "direction": "Inbound",
+              "sourceAddressPrefix": "*",
+              "sourcePortRange": "*",
+              "destinationAddressPrefix": "*",
+              "destinationPortRange": "80"
+            }
+          },
+          {
+            "name": "AllowSQL",
+            "properties": {
+              "priority": 1020,
+              "protocol": "Tcp",
+              "access": "Allow",
+              "direction": "Inbound",
+              "sourceAddressPrefix": "*",
+              "sourcePortRange": "*",
+              "destinationAddressPrefix": "*",
+              "destinationPortRange": "1433"
+            }
+          },
+          {
+            "name": "AllowSSH",
+            "properties": {
+              "priority": 1030,
+              "protocol": "Tcp",
+              "access": "Allow",
+              "direction": "Inbound",
+              "sourceAddressPrefix": "*",
+              "sourcePortRange": "*",
+              "destinationAddressPrefix": "*",
+              "destinationPortRange": "22"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "Microsoft.Network/publicIPAddresses",
+      "apiVersion": "2021-05-01",
+      "name": "[variables('publicIPName')]",
+      "location": "[parameters('location')]",
+      "sku": {
+        "name": "Standard"
+      },
+      "properties": {
+        "publicIPAllocationMethod": "Static",
+        "dnsSettings": {
+          "domainNameLabel": "[concat(parameters('projectName'), '-', parameters('environment'), '-', uniqueString(resourceGroup().id))]"
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Network/applicationGateways",
+      "apiVersion": "2021-05-01",
+      "name": "[variables('applicationGatewayName')]",
+      "location": "[parameters('location')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/virtualNetworks', variables('vnetName'))]",
+        "[resourceId('Microsoft.Network/publicIPAddresses', variables('publicIPName'))]"
+      ],
+      "properties": {
+        "sku": {
+          "name": "Standard_v2",
+          "tier": "Standard_v2",
+          "capacity": 2
+        },
+        "gatewayIPConfigurations": [
+          {
+            "name": "appGatewayIpConfig",
+            "properties": {
+              "subnet": {
+                "id": "[resourceId('Microsoft.Network/virtualNetworks/subnets', variables('vnetName'), variables('gatewaySubnetName'))]"
+              }
+            }
+          }
+        ],
+        "frontendIPConfigurations": [
+          {
+            "name": "appGatewayFrontendIP",
+            "properties": {
+              "publicIPAddress": {
+                "id": "[resourceId('Microsoft.Network/publicIPAddresses', variables('publicIPName'))]"
+              }
+            }
+          }
+        ],
+        "frontendPorts": [
+          {
+            "name": "port_80",
+            "properties": {
+              "port": 80
+            }
+          },
+          {
+            "name": "port_443",
+            "properties": {
+              "port": 443
+            }
+          }
+        ],
+        "backendAddressPools": [
+          {
+            "name": "appServiceBackendPool",
+            "properties": {
+              "backendAddresses": []
+            }
+          }
+        ],
+        "backendHttpSettingsCollection": [
+          {
+            "name": "appServiceBackendSettings",
+            "properties": {
+              "port": 80,
+              "protocol": "Http",
+              "cookieBasedAffinity": "Disabled",
+              "requestTimeout": 30
+            }
+          }
+        ],
+        "httpListeners": [
+          {
+            "name": "appServiceListener",
+            "properties": {
+              "frontendIPConfiguration": {
+                "id": "[resourceId('Microsoft.Network/applicationGateways/frontendIPConfigurations', variables('applicationGatewayName'), 'appGatewayFrontendIP')]"
+              },
+              "frontendPort": {
+                "id": "[resourceId('Microsoft.Network/applicationGateways/frontendPorts', variables('applicationGatewayName'), 'port_80')]"
+              },
+              "protocol": "Http",
+              "hostName": "[reference(resourceId('Microsoft.Network/publicIPAddresses', variables('publicIPName'))).dnsSettings.fqdn]"
+            }
+          }
+        ],
+        "requestRoutingRules": [
+          {
+            "name": "appServiceRoutingRule",
+            "properties": {
+              "ruleType": "Basic",
+              "httpListener": {
+                "id": "[resourceId('Microsoft.Network/applicationGateways/httpListeners', variables('applicationGatewayName'), 'appServiceListener')]"
+              },
+              "backendAddressPool": {
+                "id": "[resourceId('Microsoft.Network/applicationGateways/backendAddressPools', variables('applicationGatewayName'), 'appServiceBackendPool')]"
+              },
+              "backendHttpSettings": {
+                "id": "[resourceId('Microsoft.Network/applicationGateways/backendHttpSettingsCollection', variables('applicationGatewayName'), 'appServiceBackendSettings')]"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "Microsoft.Web/serverfarms",
+      "apiVersion": "2021-02-01",
+      "name": "[variables('appServicePlanName')]",
+      "location": "[parameters('location')]",
+      "kind": "linux",
+      "properties": {
+        "reserved": true
+      },
+      "sku": {
+        "name": "[parameters('appServiceSku')]",
+        "tier": "[if(equals(parameters('appServiceSku'), 'F1'), 'Free', 'Basic')]"
+      }
+    },
+    {
+      "type": "Microsoft.Web/sites",
+      "apiVersion": "2021-02-01",
+      "name": "[variables('appServiceName')]",
+      "location": "[parameters('location')]",
+      "kind": "app,linux",
+      "dependsOn": [
+        "[resourceId('Microsoft.Web/serverfarms', variables('appServicePlanName'))]",
+        "[resourceId('Microsoft.Network/virtualNetworks', variables('vnetName'))]"
+      ],
+      "properties": {
+        "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', variables('appServicePlanName'))]",
+        "siteConfig": {
+          "linuxFxVersion": "DOTNETCORE|6.0",
+          "appSettings": [
+            {
+              "name": "WEBSITES_ENABLE_APP_SERVICE_STORAGE",
+              "value": "false"
+            },
+            {
+              "name": "WEBSITES_PORT",
+              "value": "80"
+            }
+          ],
+          "alwaysOn": "[if(contains(parameters('appServiceSku'), 'F'), 'false', 'true')]",
+          "httpLoggingEnabled": true,
+          "logsDirectorySizeLimit": 35,
+          "detailedErrorLoggingEnabled": true,
+          "publishingUsername": "$[variables('appServiceName')]",
+          "scmType": "None"
+        },
+        "httpsOnly": true,
+        "redundancyMode": "None"
+      }
+    },
+    {
+      "type": "Microsoft.Web/sites/virtualNetworkConnections",
+      "apiVersion": "2021-02-01",
+      "name": "[concat(variables('appServiceName'), '/', variables('vnetName'))]",
+      "location": "[parameters('location')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Web/sites', variables('appServiceName'))]",
+        "[resourceId('Microsoft.Network/virtualNetworks', variables('vnetName'))]"
+      ],
+      "properties": {
+        "vnetResourceId": "[resourceId('Microsoft.Network/virtualNetworks', variables('vnetName'))]",
+        "isSwift": true
+      }
+    },
+    {
+      "type": "Microsoft.Storage/storageAccounts",
+      "apiVersion": "2021-09-01",
+      "name": "[variables('storageAccountName')]",
+      "location": "[parameters('location')]",
+      "sku": {
+        "name": "[parameters('storageSku')]"
+      },
+      "kind": "StorageV2",
+      "properties": {
+        "accessTier": "Hot",
+        "allowBlobPublicAccess": false,
+        "minimumTlsVersion": "TLS1_2",
+        "supportsHttpsTrafficOnly": true,
+        "networkAcls": {
+          "bypass": "AzureServices",
+          "virtualNetworkRules": [],
+          "defaultAction": "Allow"
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Storage/storageAccounts/blobServices/containers",
+      "apiVersion": "2021-09-01",
+      "name": "[concat(variables('storageAccountName'), '/default/appdata')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName'))]"
+      ],
+      "properties": {
+        "publicAccess": "None"
+      }
+    },
+    {
+      "type": "Microsoft.Sql/servers",
+      "apiVersion": "2021-11-01",
+      "name": "[variables('sqlServerName')]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "administratorLogin": "[parameters('sqlAdministratorLogin')]",
+        "administratorLoginPassword": "[parameters('sqlAdministratorLoginPassword')]",
+        "version": "12.0",
+        "publicNetworkAccess": "Enabled"
+      }
+    },
+    {
+      "type": "Microsoft.Sql/servers/firewallRules",
+      "apiVersion": "2021-11-01",
+      "name": "[concat(variables('sqlServerName'), '/AllowAzureServices')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Sql/servers', variables('sqlServerName'))]"
+      ],
+      "properties": {
+        "startIpAddress": "0.0.0.0",
+        "endIpAddress": "0.0.0.0"
+      }
+    },
+    {
+      "type": "Microsoft.Sql/servers/firewallRules",
+      "apiVersion": "2021-11-01",
+      "name": "[concat(variables('sqlServerName'), '/AllowAllIPs')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Sql/servers', variables('sqlServerName'))]"
+      ],
+      "condition": "[parameters('enablePublicNetworkAccess')]",
+      "properties": {
+        "startIpAddress": "0.0.0.0",
+        "endIpAddress": "255.255.255.255"
+      }
+    },
+    {
+      "type": "Microsoft.Sql/servers/databases",
+      "apiVersion": "2021-11-01",
+      "name": "[concat(variables('sqlServerName'), '/', variables('sqlDatabaseName'))]",
+      "location": "[parameters('location')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Sql/servers', variables('sqlServerName'))]"
+      ],
+      "sku": {
+        "name": "[parameters('sqlDatabaseSku')]",
+        "tier": "[if(equals(parameters('sqlDatabaseSku'), 'Basic'), 'Basic', 'Standard')]"
+      },
+      "properties": {
+        "collation": "SQL_Latin1_General_CP1_CI_AS",
+        "maxSizeBytes": 1073741824,
+        "catalogCollation": "SQL_Latin1_General_CP1_CI_AS",
+        "zoneRedundant": false,
+        "readScale": "Disabled",
+        "requestedBackupStorageRedundancy": "Local"
+      }
+    },
+    {
+      "type": "Microsoft.Sql/servers/databases",
+      "apiVersion": "2021-11-01",
+      "name": "[concat(variables('sqlServerName'), '/', variables('sqlDWHName'))]",
+      "location": "[parameters('location')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Sql/servers', variables('sqlServerName'))]"
+      ],
+      "sku": {
+        "name": "[parameters('sqlDatabaseSku')]",
+        "tier": "[if(equals(parameters('sqlDatabaseSku'), 'Basic'), 'Basic', 'Standard')]"
+      },
+      "properties": {
+        "collation": "SQL_Latin1_General_CP1_CI_AS",
+        "maxSizeBytes": 1073741824,
+        "catalogCollation": "SQL_Latin1_General_CP1_CI_AS",
+        "zoneRedundant": false,
+        "readScale": "Disabled",
+        "requestedBackupStorageRedundancy": "Local"
+      }
+    }
+  ],
+  "outputs": {
+    "vnetName": {
+      "type": "string",
+      "value": "[variables('vnetName')]"
+    },
+    "appServiceName": {
+      "type": "string",
+      "value": "[variables('appServiceName')]"
+    },
+    "appServiceUrl": {
+      "type": "string",
+      "value": "[concat('https://', reference(variables('appServiceName')).defaultHostName)]"
+    },
+    "storageAccountName": {
+      "type": "string",
+      "value": "[variables('storageAccountName')]"
+    },
+    "storageAccountUrl": {
+      "type": "string",
+      "value": "[reference(variables('storageAccountName')).primaryEndpoints.blob]"
+    },
+    "sqlServerName": {
+      "type": "string",
+      "value": "[variables('sqlServerName')]"
+    },
+    "sqlServerFqdn": {
+      "type": "string",
+      "value": "[reference(variables('sqlServerName')).fullyQualifiedDomainName]"
+    },
+    "publicIPAddress": {
+      "type": "string",
+      "value": "[reference(variables('publicIPName')).ipAddress]"
+    },
+    "publicIPFqdn": {
+      "type": "string",
+      "value": "[reference(variables('publicIPName')).dnsSettings.fqdn]"
+    },
+    "applicationGatewayUrl": {
+      "type": "string",
+      "value": "[concat('http://', reference(variables('publicIPName')).dnsSettings.fqdn)]"
+    }
+  }
+}

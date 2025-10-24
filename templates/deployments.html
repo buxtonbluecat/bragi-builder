@@ -2,6 +2,105 @@
 
 {% block title %}Deployments - Bragi Builder{% endblock %}
 
+{% block styles %}
+<style>
+    .deployment-item {
+        border: 1px solid #dee2e6;
+        border-radius: 0.375rem;
+        background-color: #fff;
+    }
+    
+    .deployment-item.succeeded {
+        border-left: 4px solid #28a745;
+        background-color: #f8fff9;
+    }
+    
+    .deployment-item.running {
+        border-left: 4px solid #ffc107;
+        background-color: #fffbf0;
+    }
+    
+    .deployment-item.failed {
+        border-left: 4px solid #dc3545;
+        background-color: #fff5f5;
+        border-color: #f5c6cb;
+    }
+    
+    .deployment-item.unknown {
+        border-left: 4px solid #6c757d;
+        background-color: #f8f9fa;
+    }
+    
+    .status-badge {
+        font-size: 0.75rem;
+        padding: 0.25rem 0.5rem;
+    }
+    
+    .spinner-border-sm {
+        width: 1rem;
+        height: 1rem;
+    }
+    
+    .toast {
+        z-index: 1050;
+    }
+    
+    .error-details {
+        max-height: 400px;
+        overflow-y: auto;
+    }
+    
+    .error-item {
+        background-color: #f8d7da;
+        border: 1px solid #f5c6cb;
+        border-radius: 0.25rem;
+    }
+    
+    .resource-status-table {
+        font-size: 0.875rem;
+    }
+    
+    .resource-status-table th {
+        font-weight: 600;
+        border-bottom: 2px solid #dee2e6;
+    }
+    
+    .resource-status-table td {
+        vertical-align: middle;
+        padding: 0.75rem 0.5rem;
+    }
+    
+    .resource-name {
+        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        font-weight: 500;
+    }
+    
+    .resource-type-badge {
+        font-size: 0.75rem;
+        padding: 0.25rem 0.5rem;
+    }
+    
+    .status-badge {
+        font-size: 0.75rem;
+        padding: 0.25rem 0.5rem;
+        font-weight: 500;
+    }
+    
+    .operation-details-btn {
+        font-size: 0.75rem;
+        padding: 0.25rem 0.5rem;
+    }
+    
+    .resource-row:hover {
+        background-color: #f8f9fa;
+    }
+    
+    .resource-row.selected {
+        background-color: #e3f2fd;
+    }
+</style>
+{% endblock %}
+
 {% block content %}
 <div class="d-flex justify-content-between flex-wrap flex-md-nowrap align-items-center pt-3 pb-2 mb-3 border-bottom">
     <h1 class="h2">Deployments</h1>
@@ -71,6 +170,58 @@
                             </div>
                         </div>
                         {% endif %}
+                        
+                        {% if deployment.status == 'Failed' and deployment.error_details %}
+                        <div class="mt-3">
+                            <button class="btn btn-sm btn-outline-danger" type="button" data-bs-toggle="collapse" data-bs-target="#errors_{{ loop.index }}">
+                                <i class="fas fa-exclamation-triangle"></i> View Error Details ({{ deployment.error_details|length }})
+                            </button>
+                            <div class="collapse mt-2" id="errors_{{ loop.index }}">
+                                <div class="card card-body">
+                                    <h6 class="text-danger">Deployment Failed - Error Details:</h6>
+                                    {% for error in deployment.error_details %}
+                                    <div class="mb-3 p-2 border-start border-danger border-3">
+                                        <strong>{{ error.code or 'Error' }}:</strong> {{ error.message }}
+                                        {% if error.target %}
+                                        <br><small class="text-muted">Target: {{ error.target }}</small>
+                                        {% endif %}
+                                        {% if error.type == 'failed_operations' and error.operations %}
+                                        <div class="mt-2">
+                                            <strong>Failed Operations:</strong>
+                                            <ul class="mb-0 mt-1">
+                                                {% for op in error.operations %}
+                                                <li><strong>{{ op.resource_name }}</strong> ({{ op.resource_type }}): {{ op.status_message or 'Failed' }}</li>
+                                                {% endfor %}
+                                            </ul>
+                                        </div>
+                                        {% endif %}
+                                    </div>
+                                    {% endfor %}
+                                </div>
+                            </div>
+                        </div>
+                        {% endif %}
+                        
+                        {% if deployment.status in ['Running', 'Succeeded', 'Failed'] %}
+                        <div class="mt-3">
+                            <button class="btn btn-sm btn-outline-info" type="button" data-bs-toggle="collapse" data-bs-target="#resources_{{ loop.index }}" onclick="loadResourceStatus('{{ deployment.deployment_name }}', '{{ deployment.resource_group }}', {{ loop.index }})">
+                                <i class="fas fa-list"></i> View Resource Status
+                            </button>
+                            <div class="collapse mt-2" id="resources_{{ loop.index }}">
+                                <div class="card card-body">
+                                    <h6 class="mb-3">Deployment Resources</h6>
+                                    <div id="resourceStatus_{{ loop.index }}">
+                                        <div class="text-center">
+                                            <div class="spinner-border spinner-border-sm" role="status">
+                                                <span class="visually-hidden">Loading...</span>
+                                            </div>
+                                            <span class="ms-2">Loading resource status...</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        {% endif %}
                     </div>
                     {% endfor %}
                 {% else %}
@@ -100,7 +251,7 @@
                 <form id="deployForm">
                     <div class="mb-3">
                         <label for="templateName" class="form-label">Template</label>
-                        <select class="form-select" id="templateName" name="template_name" required>
+                        <select class="form-select" id="templateName" name="template_name" required onchange="toggleVNetValidation()">
                             <option value="">Select a template...</option>
                             {% for template in templates %}
                             <option value="{{ template }}">{{ template }}</option>
@@ -151,6 +302,56 @@
                         </div>
                     </div>
                     
+                    <!-- VNet Address Space Validation (for complete-environment templates) -->
+                    <div id="vnetValidationSection" class="mb-3" style="display: none;">
+                        <div class="card border-info">
+                            <div class="card-header bg-info text-white">
+                                <h6 class="mb-0">
+                                    <i class="fas fa-network-wired"></i> VNet Address Space Validation
+                                </h6>
+                            </div>
+                            <div class="card-body">
+                                <div class="mb-3">
+                                    <label for="vnetAddressSpace" class="form-label">VNet Address Space</label>
+                                    <div class="input-group">
+                                        <input type="text" class="form-control" id="vnetAddressSpace" name="vnet_address_space" value="10.0.0.0/16" placeholder="10.0.0.0/16">
+                                        <button class="btn btn-outline-primary" type="button" onclick="validateVNetAddressSpace()">
+                                            <i class="fas fa-check"></i> Validate
+                                        </button>
+                                    </div>
+                                    <div class="form-text">Check for overlaps with existing VNets in the region</div>
+                                </div>
+                                
+                                <div id="vnetValidationResult" style="display: none;">
+                                    <div id="vnetValidationStatus" class="d-flex align-items-center mb-2">
+                                        <div class="spinner-border spinner-border-sm me-2" role="status">
+                                            <span class="visually-hidden">Validating...</span>
+                                        </div>
+                                        <span>Validating address space...</span>
+                                    </div>
+                                </div>
+                                
+                                <div id="vnetValidationSuccess" class="alert alert-success" style="display: none;">
+                                    <i class="fas fa-check-circle"></i>
+                                    <strong>Address space is available!</strong>
+                                    <div id="vnetSuccessMessage"></div>
+                                </div>
+                                
+                                <div id="vnetValidationWarning" class="alert alert-warning" style="display: none;">
+                                    <i class="fas fa-exclamation-triangle"></i>
+                                    <strong>Address space conflicts detected!</strong>
+                                    <div id="vnetWarningMessage"></div>
+                                    <div id="vnetRecommendations" class="mt-2"></div>
+                                </div>
+                                
+                                <div class="mt-2">
+                                    <small class="text-muted">Common address spaces:</small>
+                                    <div id="commonAddressSpaces" class="d-flex flex-wrap gap-1 mt-1"></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
                     <div class="mb-3">
                         <label for="sqlAdminLogin" class="form-label">SQL Admin Login</label>
                         <input type="text" class="form-control" id="sqlAdminLogin" name="sql_admin_login" value="sqladmin" placeholder="sqladmin">
@@ -159,8 +360,20 @@
                     
                     <div class="mb-3">
                         <label for="sqlAdminPassword" class="form-label">SQL Admin Password</label>
-                        <input type="password" class="form-control" id="sqlAdminPassword" name="sql_admin_password" required placeholder="Enter SQL admin password">
+                        <input type="password" class="form-control" id="sqlAdminPassword" name="sql_admin_password" required placeholder="Enter SQL admin password" oninput="validateSqlPassword()">
                         <div class="form-text">SQL Server administrator password (required for complete-environment template)</div>
+                        <div id="sqlPasswordValidation" class="mt-2" style="display: none;">
+                            <div class="alert alert-warning" role="alert">
+                                <h6 class="alert-heading">Password Requirements:</h6>
+                                <ul class="mb-0">
+                                    <li id="lengthCheck">At least 8 characters long</li>
+                                    <li id="uppercaseCheck">Contains uppercase letters (A-Z)</li>
+                                    <li id="lowercaseCheck">Contains lowercase letters (a-z)</li>
+                                    <li id="numberCheck">Contains numbers (0-9)</li>
+                                    <li id="specialCheck">Contains special characters (!@#$%^&*()_+-=[]{}|;:,.<>?)</li>
+                                </ul>
+                            </div>
+                        </div>
                     </div>
                     
                     <div class="mb-3">
@@ -211,21 +424,49 @@ socket.on('deployment_status', function(data) {
 function updateDeploymentStatus(data) {
     const statusElement = document.getElementById('deploymentStatus');
     if (statusElement) {
+        let alertClass = 'alert-info';
+        if (data.status === 'Succeeded') alertClass = 'alert-success';
+        if (data.status === 'Failed') alertClass = 'alert-danger';
+        if (data.status === 'Canceled') alertClass = 'alert-warning';
+        
+        let errorDetailsHtml = '';
+        if (data.error_details && data.error_details.length > 0) {
+            errorDetailsHtml = '<div class="mt-3"><h6>Error Details:</h6><ul class="list-unstyled">';
+            data.error_details.forEach((error, index) => {
+                if (error.type === 'failed_operations') {
+                    errorDetailsHtml += '<li><strong>Failed Operations:</strong><ul>';
+                    error.operations.forEach(op => {
+                        errorDetailsHtml += `<li><strong>${op.resource_name}</strong> (${op.resource_type}): ${op.status_message || 'Failed'}</li>`;
+                    });
+                    errorDetailsHtml += '</ul></li>';
+                } else {
+                    errorDetailsHtml += `<li><strong>Error ${index + 1}:</strong> ${error.message}`;
+                    if (error.target) errorDetailsHtml += ` (Target: ${error.target})`;
+                    errorDetailsHtml += '</li>';
+                }
+            });
+            errorDetailsHtml += '</ul></div>';
+        }
+        
         statusElement.innerHTML = `
-            <div class="alert alert-info">
+            <div class="alert ${alertClass}">
                 <h6>Deployment Status: ${data.status}</h6>
-                <p>Deployment: ${data.deployment_name}</p>
-                <p>Last Updated: ${new Date(data.timestamp).toLocaleString()}</p>
-                ${data.outputs ? '<p>Outputs: ' + JSON.stringify(data.outputs) + '</p>' : ''}
+                <p><strong>Deployment:</strong> ${data.deployment_name}</p>
+                <p><strong>Last Updated:</strong> ${new Date(data.timestamp).toLocaleString()}</p>
+                <p><strong>Elapsed Time:</strong> ${data.elapsed_time}s</p>
+                <p><strong>Status Message:</strong> ${data.status_message}</p>
+                ${data.outputs ? '<p><strong>Outputs:</strong> ' + JSON.stringify(data.outputs) + '</p>' : ''}
+                ${errorDetailsHtml}
             </div>
         `;
     }
     
-    // If deployment is complete, refresh the page
+    // If deployment is complete, refresh the page after a longer delay to show error details
     if (data.status === 'Succeeded' || data.status === 'Failed' || data.status === 'Canceled') {
+        const delay = data.status === 'Failed' ? 10000 : 3000; // Show errors for 10 seconds
         setTimeout(() => {
             location.reload();
-        }, 3000);
+        }, delay);
     }
 }
 
@@ -270,6 +511,207 @@ function showDeploymentStatusArea() {
     statusElement.style.display = 'block';
 }
 
+function validateSqlPassword() {
+    const password = document.getElementById('sqlAdminPassword').value;
+    const validationDiv = document.getElementById('sqlPasswordValidation');
+    
+    if (!password) {
+        validationDiv.style.display = 'none';
+        return true;
+    }
+    
+    // Show validation div
+    validationDiv.style.display = 'block';
+    
+    // Check requirements
+    const lengthCheck = document.getElementById('lengthCheck');
+    const uppercaseCheck = document.getElementById('uppercaseCheck');
+    const lowercaseCheck = document.getElementById('lowercaseCheck');
+    const numberCheck = document.getElementById('numberCheck');
+    const specialCheck = document.getElementById('specialCheck');
+    
+    // Length check (at least 8 characters)
+    const hasLength = password.length >= 8;
+    lengthCheck.style.color = hasLength ? 'green' : 'red';
+    lengthCheck.innerHTML = hasLength ? '✓ At least 8 characters long' : '✗ At least 8 characters long';
+    
+    // Uppercase check
+    const hasUppercase = /[A-Z]/.test(password);
+    uppercaseCheck.style.color = hasUppercase ? 'green' : 'red';
+    uppercaseCheck.innerHTML = hasUppercase ? '✓ Contains uppercase letters (A-Z)' : '✗ Contains uppercase letters (A-Z)';
+    
+    // Lowercase check
+    const hasLowercase = /[a-z]/.test(password);
+    lowercaseCheck.style.color = hasLowercase ? 'green' : 'red';
+    lowercaseCheck.innerHTML = hasLowercase ? '✓ Contains lowercase letters (a-z)' : '✗ Contains lowercase letters (a-z)';
+    
+    // Number check
+    const hasNumber = /[0-9]/.test(password);
+    numberCheck.style.color = hasNumber ? 'green' : 'red';
+    numberCheck.innerHTML = hasNumber ? '✓ Contains numbers (0-9)' : '✗ Contains numbers (0-9)';
+    
+    // Special character check
+    const hasSpecial = /[!@#$%^&*()_+\-=\[\]{}|;:,.<>?]/.test(password);
+    specialCheck.style.color = hasSpecial ? 'green' : 'red';
+    specialCheck.innerHTML = hasSpecial ? '✓ Contains special characters' : '✗ Contains special characters';
+    
+    // Return true if all requirements are met
+    return hasLength && hasUppercase && hasLowercase && hasNumber && hasSpecial;
+}
+
+function loadResourceStatus(deploymentName, resourceGroup, index) {
+    const statusDiv = document.getElementById(`resourceStatus_${index}`);
+    
+    // Show loading state
+    statusDiv.innerHTML = `
+        <div class="text-center">
+            <div class="spinner-border spinner-border-sm" role="status">
+                <span class="visually-hidden">Loading...</span>
+            </div>
+            <span class="ms-2">Loading resource status...</span>
+        </div>
+    `;
+    
+    // Fetch resource status from backend
+    fetch(`/api/deployment-resources/${deploymentName}?resource_group=${resourceGroup}`)
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                displayResourceStatus(data.resources, statusDiv);
+            } else {
+                statusDiv.innerHTML = `
+                    <div class="alert alert-warning">
+                        <i class="fas fa-exclamation-triangle"></i> Could not load resource status: ${data.message}
+                    </div>
+                `;
+            }
+        })
+        .catch(error => {
+            statusDiv.innerHTML = `
+                <div class="alert alert-danger">
+                    <i class="fas fa-exclamation-circle"></i> Error loading resource status: ${error.message}
+                </div>
+            `;
+        });
+}
+
+function displayResourceStatus(resources, container) {
+    if (!resources || resources.length === 0) {
+        container.innerHTML = `
+            <div class="alert alert-info">
+                <i class="fas fa-info-circle"></i> No resources found for this deployment.
+            </div>
+        `;
+        return;
+    }
+    
+    let html = `
+        <div class="table-responsive">
+            <table class="table table-sm table-hover resource-status-table">
+                <thead class="table-light">
+                    <tr>
+                        <th style="width: 40%">Resource</th>
+                        <th style="width: 25%">Type</th>
+                        <th style="width: 20%">Status</th>
+                        <th style="width: 15%">Details</th>
+                    </tr>
+                </thead>
+                <tbody>
+    `;
+    
+    resources.forEach(resource => {
+        const statusIcon = getStatusIcon(resource.status);
+        const statusClass = getStatusClass(resource.status);
+        const resourceName = resource.name || 'Unknown';
+        const resourceType = resource.type || 'Unknown';
+        const status = resource.status || 'Unknown';
+        
+        html += `
+            <tr class="resource-row" onclick="selectResourceRow(this)">
+                <td>
+                    <div class="d-flex align-items-center">
+                        <span class="me-2">${statusIcon}</span>
+                        <span class="text-truncate resource-name" title="${resourceName}">${resourceName}</span>
+                    </div>
+                </td>
+                <td>
+                    <span class="badge bg-secondary resource-type-badge">${resourceType}</span>
+                </td>
+                <td>
+                    <span class="badge ${statusClass} status-badge">${status}</span>
+                </td>
+                <td>
+                    ${resource.operationId ? `<a href="#" onclick="showOperationDetails('${resource.operationId}')" class="btn btn-sm btn-outline-primary operation-details-btn">Details</a>` : '-'}
+                </td>
+            </tr>
+        `;
+    });
+    
+    html += `
+                </tbody>
+            </table>
+        </div>
+    `;
+    
+    container.innerHTML = html;
+}
+
+function getStatusIcon(status) {
+    switch (status.toLowerCase()) {
+        case 'succeeded':
+        case 'ok':
+            return '<i class="fas fa-check-circle text-success"></i>';
+        case 'running':
+        case 'creating':
+        case 'updating':
+        case 'deleting':
+            return '<i class="fas fa-sync-alt fa-spin text-primary"></i>';
+        case 'failed':
+        case 'error':
+            return '<i class="fas fa-exclamation-circle text-danger"></i>';
+        case 'cancelled':
+        case 'canceled':
+            return '<i class="fas fa-times-circle text-warning"></i>';
+        default:
+            return '<i class="fas fa-question-circle text-muted"></i>';
+    }
+}
+
+function getStatusClass(status) {
+    switch (status.toLowerCase()) {
+        case 'succeeded':
+        case 'ok':
+            return 'bg-success';
+        case 'running':
+        case 'creating':
+        case 'updating':
+        case 'deleting':
+            return 'bg-primary';
+        case 'failed':
+        case 'error':
+            return 'bg-danger';
+        case 'cancelled':
+        case 'canceled':
+            return 'bg-warning';
+        default:
+            return 'bg-secondary';
+    }
+}
+
+function showOperationDetails(operationId) {
+    // This would show detailed operation information
+    alert(`Operation details for: ${operationId}`);
+}
+
+function selectResourceRow(row) {
+    // Remove selected class from all rows
+    const allRows = document.querySelectorAll('.resource-row');
+    allRows.forEach(r => r.classList.remove('selected'));
+    
+    // Add selected class to clicked row
+    row.classList.add('selected');
+}
+
 function deployTemplate() {
     const form = document.getElementById('deployForm');
     const formData = new FormData(form);
@@ -296,6 +738,14 @@ function deployTemplate() {
     if (templateName === 'complete-environment' && !sqlPassword) {
         alert('SQL Admin Password is required for complete-environment template');
         return;
+    }
+    
+    // Validate SQL password complexity for complete-environment template
+    if (templateName === 'complete-environment' && sqlPassword) {
+        if (!validateSqlPassword()) {
+            alert('SQL Admin Password does not meet complexity requirements. Please check the requirements below.');
+            return;
+        }
     }
     
     const data = {
@@ -332,6 +782,12 @@ function deployTemplate() {
     // Show status area
     showDeploymentStatusArea();
     
+    // Disable the deploy button and show loading state
+    const deployButton = document.querySelector('button[onclick="deployTemplate()"]');
+    const originalText = deployButton.innerHTML;
+    deployButton.disabled = true;
+    deployButton.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Deploying...';
+    
     fetch('/deploy', {
         method: 'POST',
         headers: {
@@ -351,7 +807,26 @@ function deployTemplate() {
             
             // Request status updates
             socket.emit('get_deployment_status', {deployment_name: currentDeployment});
+            
+            // Show success message
+            showSuccessNotification(`Deployment started successfully!`, `Deployment Name: ${currentDeployment}<br>Resource Group: ${resourceGroup}<br><br>You can monitor the progress below.`);
+            
+            // Close the modal
+            const modal = bootstrap.Modal.getInstance(document.getElementById('deployModal'));
+            if (modal) {
+                modal.hide();
+            }
+            
+            // Refresh the page to show the new deployment
+            setTimeout(() => {
+                location.reload();
+            }, 1000);
         } else {
+            // Reset button on error
+            deployButton.disabled = false;
+            deployButton.innerHTML = originalText;
+            
+            showErrorNotification('Deployment Failed', data.message);
             showDeploymentError({
                 deployment_name: 'Unknown',
                 error: data.message
@@ -359,6 +834,11 @@ function deployTemplate() {
         }
     })
     .catch(error => {
+        // Reset button on error
+        deployButton.disabled = false;
+        deployButton.innerHTML = originalText;
+        
+        showErrorNotification('Deployment Error', error.toString());
         showDeploymentError({
             deployment_name: 'Unknown',
             error: error.toString()
@@ -498,6 +978,125 @@ function displayRegionCapabilities(capabilities) {
     }
 }
 
+// VNet Address Space Validation Functions
+function validateVNetAddressSpace() {
+    const addressSpace = document.getElementById('vnetAddressSpace').value;
+    const location = document.getElementById('location').value;
+    
+    if (!addressSpace) {
+        alert('Please enter a VNet address space');
+        return;
+    }
+    
+    if (!location) {
+        alert('Please select a location first');
+        return;
+    }
+    
+    showVNetValidation();
+    
+    const params = new URLSearchParams({
+        address_space: addressSpace,
+        location: location
+    });
+    
+    fetch(`/api/vnet/validate?${params}`)
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                displayVNetValidationResult(data.validation);
+            } else {
+                console.error('Error validating VNet:', data.message);
+                hideVNetValidation();
+                alert('Error validating VNet address space: ' + data.message);
+            }
+        })
+        .catch(error => {
+            console.error('Error validating VNet:', error);
+            hideVNetValidation();
+            alert('Error validating VNet address space: ' + error);
+        });
+}
+
+function showVNetValidation() {
+    document.getElementById('vnetValidationResult').style.display = 'block';
+    document.getElementById('vnetValidationSuccess').style.display = 'none';
+    document.getElementById('vnetValidationWarning').style.display = 'none';
+}
+
+function hideVNetValidation() {
+    document.getElementById('vnetValidationResult').style.display = 'none';
+}
+
+function displayVNetValidationResult(validation) {
+    hideVNetValidation();
+    
+    if (validation.is_valid) {
+        document.getElementById('vnetSuccessMessage').innerHTML = 
+            `No overlaps detected with ${validation.total_existing_vnets_checked} existing VNets in the region.`;
+        document.getElementById('vnetValidationSuccess').style.display = 'block';
+    } else {
+        let warningMessage = `Found ${validation.overlaps.length} overlap(s):<br><ul>`;
+        validation.overlaps.forEach(overlap => {
+            warningMessage += `<li><strong>${overlap.vnet_name}</strong> (${overlap.conflicting_prefix}) - ${overlap.overlap_type}</li>`;
+        });
+        warningMessage += '</ul>';
+        
+        document.getElementById('vnetWarningMessage').innerHTML = warningMessage;
+        
+        if (validation.recommendations && validation.recommendations.length > 0) {
+            let recommendations = '<strong>Recommendations:</strong><ul>';
+            validation.recommendations.forEach(rec => {
+                recommendations += `<li>${rec}</li>`;
+            });
+            recommendations += '</ul>';
+            document.getElementById('vnetRecommendations').innerHTML = recommendations;
+        }
+        
+        document.getElementById('vnetValidationWarning').style.display = 'block';
+    }
+}
+
+// Load common address spaces
+function loadCommonAddressSpaces() {
+    fetch('/api/vnet/common-spaces')
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                const container = document.getElementById('commonAddressSpaces');
+                data.common_spaces.forEach(space => {
+                    const badge = document.createElement('span');
+                    badge.className = 'badge bg-light text-dark me-1';
+                    badge.style.cursor = 'pointer';
+                    badge.textContent = space;
+                    badge.onclick = () => {
+                        document.getElementById('vnetAddressSpace').value = space;
+                    };
+                    container.appendChild(badge);
+                });
+            }
+        })
+        .catch(error => {
+            console.error('Error loading common address spaces:', error);
+        });
+}
+
+// Toggle VNet validation section based on template selection
+function toggleVNetValidation() {
+    const templateSelect = document.getElementById('templateName');
+    const vnetSection = document.getElementById('vnetValidationSection');
+    
+    if (templateSelect.value && templateSelect.value.includes('complete-environment')) {
+        vnetSection.style.display = 'block';
+        // Load common address spaces when section is shown
+        if (document.getElementById('commonAddressSpaces').children.length === 0) {
+            loadCommonAddressSpaces();
+        }
+    } else {
+        vnetSection.style.display = 'none';
+    }
+}
+
 function updateStatusBadge(elementId, isAvailable, serviceName) {
     const badge = document.getElementById(elementId);
     if (isAvailable) {
@@ -518,11 +1117,155 @@ function toggleResourceGroupInput() {
         inputDiv.style.display = 'block';
         newNameInput.required = true;
         newNameInput.focus();
+        
+        // Add validation event listener
+        newNameInput.addEventListener('input', validateResourceGroupName);
     } else {
         inputDiv.style.display = 'none';
         newNameInput.required = false;
         newNameInput.value = '';
+        
+        // Remove validation event listener
+        newNameInput.removeEventListener('input', validateResourceGroupName);
+        
+        // Clear any validation messages
+        clearResourceGroupValidation();
     }
+}
+
+function validateResourceGroupName() {
+    const input = document.getElementById('newResourceGroupName');
+    const name = input.value.trim();
+    
+    if (!name) {
+        clearResourceGroupValidation();
+        return;
+    }
+    
+    // Show loading state
+    showResourceGroupValidation('Validating resource group name...', 'info');
+    
+    fetch(`/api/resource-groups/validate?name=${encodeURIComponent(name)}`)
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                const validation = data.validation;
+                if (validation.is_valid) {
+                    showResourceGroupValidation(validation.message, 'success');
+                } else {
+                    showResourceGroupValidation(validation.error, 'error', validation.suggestion);
+                }
+            } else {
+                showResourceGroupValidation('Validation failed: ' + data.message, 'error');
+            }
+        })
+        .catch(error => {
+            showResourceGroupValidation('Validation error: ' + error, 'error');
+        });
+}
+
+function showResourceGroupValidation(message, type, suggestion = null) {
+    let validationDiv = document.getElementById('resourceGroupValidation');
+    if (!validationDiv) {
+        validationDiv = document.createElement('div');
+        validationDiv.id = 'resourceGroupValidation';
+        validationDiv.className = 'mt-2';
+        
+        const inputDiv = document.getElementById('newResourceGroupInput');
+        inputDiv.appendChild(validationDiv);
+    }
+    
+    let alertClass = 'alert-info';
+    if (type === 'success') alertClass = 'alert-success';
+    if (type === 'error') alertClass = 'alert-danger';
+    
+    let html = `<div class="alert ${alertClass} alert-sm mb-0">${message}</div>`;
+    if (suggestion) {
+        html += `<div class="form-text text-muted">${suggestion}</div>`;
+    }
+    
+    validationDiv.innerHTML = html;
+}
+
+function clearResourceGroupValidation() {
+    const validationDiv = document.getElementById('resourceGroupValidation');
+    if (validationDiv) {
+        validationDiv.innerHTML = '';
+    }
+}
+
+function showSuccessNotification(title, message) {
+    // Create a Bootstrap toast notification
+    const toastHtml = `
+        <div class="toast align-items-center text-white bg-success border-0" role="alert" aria-live="assertive" aria-atomic="true">
+            <div class="d-flex">
+                <div class="toast-body">
+                    <strong>${title}</strong><br>
+                    ${message}
+                </div>
+                <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast" aria-label="Close"></button>
+            </div>
+        </div>
+    `;
+    
+    // Add to toast container
+    let toastContainer = document.getElementById('toastContainer');
+    if (!toastContainer) {
+        toastContainer = document.createElement('div');
+        toastContainer.id = 'toastContainer';
+        toastContainer.className = 'toast-container position-fixed top-0 end-0 p-3';
+        toastContainer.style.zIndex = '9999';
+        document.body.appendChild(toastContainer);
+    }
+    
+    toastContainer.insertAdjacentHTML('beforeend', toastHtml);
+    
+    // Show the toast
+    const toastElement = toastContainer.lastElementChild;
+    const toast = new bootstrap.Toast(toastElement, { delay: 5000 });
+    toast.show();
+    
+    // Remove the toast element after it's hidden
+    toastElement.addEventListener('hidden.bs.toast', () => {
+        toastElement.remove();
+    });
+}
+
+function showErrorNotification(title, message) {
+    // Create a Bootstrap toast notification
+    const toastHtml = `
+        <div class="toast align-items-center text-white bg-danger border-0" role="alert" aria-live="assertive" aria-atomic="true">
+            <div class="d-flex">
+                <div class="toast-body">
+                    <strong>${title}</strong><br>
+                    ${message}
+                </div>
+                <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast" aria-label="Close"></button>
+            </div>
+        </div>
+    `;
+    
+    // Add to toast container
+    let toastContainer = document.getElementById('toastContainer');
+    if (!toastContainer) {
+        toastContainer = document.createElement('div');
+        toastContainer.id = 'toastContainer';
+        toastContainer.className = 'toast-container position-fixed top-0 end-0 p-3';
+        toastContainer.style.zIndex = '9999';
+        document.body.appendChild(toastContainer);
+    }
+    
+    toastContainer.insertAdjacentHTML('beforeend', toastHtml);
+    
+    // Show the toast
+    const toastElement = toastContainer.lastElementChild;
+    const toast = new bootstrap.Toast(toastElement, { delay: 8000 });
+    toast.show();
+    
+    // Remove the toast element after it's hidden
+    toastElement.addEventListener('hidden.bs.toast', () => {
+        toastElement.remove();
+    });
 }
 </script>
 {% endblock %}

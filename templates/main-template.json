@@ -100,7 +100,7 @@
       "location": "[parameters('location')]",
       "sku": {
         "name": "[parameters('appServiceSku')]",
-        "tier": "[if(equals(parameters('appServiceSku'), 'F1'), 'Free', if(contains(parameters('appServiceSku'), 'B'), 'Basic', if(contains(parameters('appServiceSku'), 'S'), 'Standard', 'Premium'))]"
+        "tier": "[if(equals(parameters('appServiceSku'), 'F1'), 'Free', 'Basic')]"
       },
       "kind": "linux",
       "properties": {

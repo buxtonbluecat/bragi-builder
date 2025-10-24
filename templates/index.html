@@ -16,12 +16,12 @@
 
 <!-- Overview Cards -->
 <div class="row mb-4">
-    <div class="col-md-3">
-        <div class="card text-white bg-primary">
+    <div class="col-lg-2 col-md-4 col-sm-6 mb-3">
+        <div class="card text-white bg-primary h-100">
             <div class="card-body">
                 <div class="d-flex justify-content-between">
                     <div>
-                        <h4 class="card-title">{{ templates|length }}</h4>
+                        <h4 class="card-title" id="template-count">{{ templates|length }}</h4>
                         <p class="card-text">Templates</p>
                     </div>
                     <div class="align-self-center">
@@ -31,13 +31,43 @@
             </div>
         </div>
     </div>
-    <div class="col-md-3">
-        <div class="card text-white bg-success">
+    <div class="col-lg-2 col-md-4 col-sm-6 mb-3">
+        <div class="card text-white bg-info h-100">
             <div class="card-body">
                 <div class="d-flex justify-content-between">
                     <div>
-                        <h4 class="card-title">{{ deployments|selectattr('status', 'equalto', 'Succeeded')|list|length }}</h4>
-                        <p class="card-text">Successful Deployments</p>
+                        <h4 class="card-title" id="environment-count">-</h4>
+                        <p class="card-text">Environments</p>
+                    </div>
+                    <div class="align-self-center">
+                        <i class="fas fa-server fa-2x"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-lg-2 col-md-4 col-sm-6 mb-3">
+        <div class="card text-white bg-secondary h-100">
+            <div class="card-body">
+                <div class="d-flex justify-content-between">
+                    <div>
+                        <h4 class="card-title" id="total-deployments">{{ deployments|length }}</h4>
+                        <p class="card-text">Total Deployments</p>
+                    </div>
+                    <div class="align-self-center">
+                        <i class="fas fa-rocket fa-2x"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-lg-2 col-md-4 col-sm-6 mb-3">
+        <div class="card text-white bg-success h-100">
+            <div class="card-body">
+                <div class="d-flex justify-content-between">
+                    <div>
+                        <h4 class="card-title" id="successful-deployments">{{ deployments|selectattr('status', 'equalto', 'Succeeded')|list|length }}</h4>
+                        <p class="card-text">Successful</p>
                     </div>
                     <div class="align-self-center">
                         <i class="fas fa-check-circle fa-2x"></i>
@@ -46,28 +76,29 @@
             </div>
         </div>
     </div>
-    <div class="col-md-3">
-        <div class="card text-white bg-warning">
+    <div class="col-lg-2 col-md-4 col-sm-6 mb-3">
+        <div class="card text-white bg-warning h-100">
             <div class="card-body">
                 <div class="d-flex justify-content-between">
                     <div>
-                        <h4 class="card-title">{{ deployments|selectattr('status', 'equalto', 'running')|list|length }}</h4>
-                        <p class="card-text">Running Deployments</p>
+                        <h4 class="card-title" id="running-deployments">{{ deployments|selectattr('status', 'equalto', 'running')|list|length }}</h4>
+                        <p class="card-text">Running</p>
                     </div>
                     <div class="align-self-center">
-                        <i class="fas fa-spinner fa-2x"></i>
+                        <i class="fas fa-spinner fa-2x" id="running-spinner" style="display: none;"></i>
+                        <i class="fas fa-play-circle fa-2x" id="running-icon"></i>
                     </div>
                 </div>
             </div>
         </div>
     </div>
-    <div class="col-md-3">
-        <div class="card text-white bg-danger">
+    <div class="col-lg-2 col-md-4 col-sm-6 mb-3">
+        <div class="card text-white bg-danger h-100">
             <div class="card-body">
                 <div class="d-flex justify-content-between">
                     <div>
-                        <h4 class="card-title">{{ deployments|selectattr('status', 'equalto', 'Failed')|list|length }}</h4>
-                        <p class="card-text">Failed Deployments</p>
+                        <h4 class="card-title" id="failed-deployments">{{ deployments|selectattr('status', 'equalto', 'Failed')|list|length }}</h4>
+                        <p class="card-text">Failed</p>
                     </div>
                     <div class="align-self-center">
                         <i class="fas fa-exclamation-circle fa-2x"></i>
@@ -181,4 +212,184 @@
         </div>
     </div>
 </div>
+
+<!-- WebSocket and Real-time Updates -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+<style>
+#running-spinner {
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+</style>
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    // Load environment count
+    loadEnvironmentCount();
+    
+    // Initialize running deployments display
+    updateRunningDeployments();
+    
+    // Initialize WebSocket connection
+    const socket = io();
+    
+    // Handle deployment status updates
+    socket.on('deployment_update', function(data) {
+        console.log('Deployment update received:', data);
+        updateDeploymentStatus(data);
+        updateDashboardStats();
+    });
+    
+    // Handle deployment errors
+    socket.on('deployment_error', function(data) {
+        console.error('Deployment error:', data);
+        showDeploymentError(data);
+    });
+    
+    // Handle connection
+    socket.on('connect', function() {
+        console.log('Connected to deployment updates');
+    });
+    
+    // Handle disconnection
+    socket.on('disconnect', function() {
+        console.log('Disconnected from deployment updates');
+    });
+});
+
+function loadEnvironmentCount() {
+    fetch('/resource-groups')
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                const bragiEnvironments = data.resource_groups.filter(rg => 
+                    rg.tags && rg.tags.CreatedBy === 'Bragi Builder'
+                );
+                document.getElementById('environment-count').textContent = bragiEnvironments.length;
+            }
+        })
+        .catch(error => {
+            console.error('Error loading environment count:', error);
+            document.getElementById('environment-count').textContent = '?';
+        });
+}
+
+function updateDeploymentStatus(data) {
+    // Update running deployments count and spinner
+    updateRunningDeployments();
+    
+    // Find the deployment in the recent deployments list
+    const deploymentItems = document.querySelectorAll('.deployment-item');
+    deploymentItems.forEach(item => {
+        const deploymentName = item.querySelector('h6').textContent;
+        if (deploymentName.includes(data.deployment_name)) {
+            const statusBadge = item.querySelector('.status-badge');
+            if (statusBadge) {
+                // Update status badge
+                statusBadge.textContent = data.status;
+                statusBadge.className = `badge bg-${getStatusColor(data.status)} status-badge`;
+                
+                // Add detailed status message if available
+                if (data.status_message) {
+                    // Find or create status message element
+                    let statusMessage = item.querySelector('.status-message');
+                    if (!statusMessage) {
+                        statusMessage = document.createElement('small');
+                        statusMessage.className = 'status-message text-muted d-block mt-1';
+                        statusBadge.parentNode.appendChild(statusMessage);
+                    }
+                    statusMessage.textContent = data.status_message;
+                }
+                
+                // Add elapsed time if available
+                if (data.elapsed_time) {
+                    let timeElement = item.querySelector('.elapsed-time');
+                    if (!timeElement) {
+                        timeElement = document.createElement('small');
+                        timeElement.className = 'elapsed-time text-muted d-block';
+                        item.querySelector('.text-muted').appendChild(timeElement);
+                    }
+                    const minutes = Math.floor(data.elapsed_time / 60);
+                    const seconds = data.elapsed_time % 60;
+                    timeElement.textContent = `Elapsed: ${minutes}m ${seconds}s`;
+                }
+            }
+        }
+    });
+    
+    // If deployment completed, update total count
+    if (data.completed) {
+        updateTotalDeployments();
+    }
+}
+
+function updateRunningDeployments() {
+    // Count deployments that are currently running
+    const badges = Array.from(document.querySelectorAll('.deployment-item .status-badge'));
+    const runningCount = badges.filter(badge => {
+        const status = badge.textContent.toLowerCase();
+        return status === 'running' || status === 'accepted' || status === 'creating' || status === 'updating';
+    }).length;
+    
+    const runningElement = document.getElementById('running-deployments');
+    const spinner = document.getElementById('running-spinner');
+    const icon = document.getElementById('running-icon');
+    
+    if (runningElement) {
+        runningElement.textContent = runningCount;
+    }
+    
+    // Show/hide spinner based on running count
+    if (runningCount > 0) {
+        if (spinner) spinner.style.display = 'inline';
+        if (icon) icon.style.display = 'none';
+    } else {
+        if (spinner) spinner.style.display = 'none';
+        if (icon) icon.style.display = 'inline';
+    }
+}
+
+function updateTotalDeployments() {
+    // Count all deployments (completed and running)
+    const totalCount = document.querySelectorAll('.deployment-item').length;
+    const totalElement = document.getElementById('total-deployments');
+    if (totalElement) {
+        totalElement.textContent = totalCount;
+    }
+}
+
+function updateDashboardStats() {
+    // Reload the page to get updated stats
+    // In a real implementation, you'd update the specific counters
+    setTimeout(() => {
+        location.reload();
+    }, 2000);
+}
+
+function getStatusColor(status) {
+    switch(status) {
+        case 'Succeeded': return 'success';
+        case 'Failed': return 'danger';
+        case 'Running': case 'Accepted': case 'Creating': case 'Updating': return 'warning';
+        default: return 'secondary';
+    }
+}
+
+function showDeploymentError(data) {
+    // Show error notification
+    const alertDiv = document.createElement('div');
+    alertDiv.className = 'alert alert-danger alert-dismissible fade show';
+    alertDiv.innerHTML = `
+        <strong>Deployment Error:</strong> ${data.deployment_name} - ${data.error}
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    `;
+    
+    // Insert at the top of the content
+    const content = document.querySelector('.container');
+    content.insertBefore(alertDiv, content.firstChild);
+}
+</script>
 {% endblock %}

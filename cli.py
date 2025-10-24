@@ -135,7 +135,13 @@ def deploy_template(template_name, resource_group, parameters, location):
         rg = azure_client.get_resource_group(resource_group)
         if not rg:
             click.echo(f"Creating resource group '{resource_group}' in {location}...")
-            azure_client.create_resource_group(resource_group, location)
+            # Add Bragi tags for CLI deployments
+            tags = {
+                "Environment": "CLI",
+                "DeploymentType": "CLI Template",
+                "TemplateName": template_name
+            }
+            azure_client.create_resource_group(resource_group, location, tags)
         
         # Deploy template
         click.echo(f"Deploying template '{template_name}' to resource group '{resource_group}'...")

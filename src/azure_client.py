@@ -2,12 +2,14 @@
 Azure client for managing ARM template deployments
 """
 import os
+from datetime import datetime
 from typing import List, Dict
 from azure.identity import DefaultAzureCredential, ClientSecretCredential
 from azure.mgmt.resource import ResourceManagementClient
 from azure.mgmt.web import WebSiteManagementClient
 from azure.mgmt.storage import StorageManagementClient
 from azure.mgmt.sql import SqlManagementClient
+from azure.mgmt.network import NetworkManagementClient
 from azure.core.exceptions import ResourceNotFoundError
 
 
@@ -36,6 +38,10 @@ class AzureClient:
             self.subscription_id
         )
         self.sql_client = SqlManagementClient(
+            self.credential, 
+            self.subscription_id
+        )
+        self.network_client = NetworkManagementClient(
             self.credential, 
             self.subscription_id
         )
@@ -95,11 +101,16 @@ class AzureClient:
                 deployment_name=deployment_name
             )
             
+            # Convert outputs to serializable format
+            outputs = {}
+            if deployment.properties.outputs:
+                outputs = dict(deployment.properties.outputs)
+            
             return {
                 "name": deployment.name,
                 "provisioning_state": deployment.properties.provisioning_state,
                 "timestamp": deployment.properties.timestamp,
-                "outputs": deployment.properties.outputs
+                "outputs": outputs
             }
         except ResourceNotFoundError:
             return None
@@ -114,12 +125,27 @@ class AzureClient:
         except Exception as e:
             raise Exception(f"Failed to list resource groups: {str(e)}")
     
-    def create_resource_group(self, name: str, location: str):
-        """Create a new resource group"""
+    def create_resource_group(self, name: str, location: str, tags: dict = None):
+        """Create a new resource group with optional tags"""
         try:
+            # Default Bragi tags
+            default_tags = {
+                "CreatedBy": "Bragi Builder",
+                "Project": "Bragi",
+                "Environment": "Unknown",
+                "CreatedDate": datetime.now().strftime("%Y-%m-%d")
+            }
+            
+            # Merge with any provided tags
+            if tags:
+                default_tags.update(tags)
+            
             resource_group = self.resource_client.resource_groups.create_or_update(
                 resource_group_name=name,
-                parameters={"location": location}
+                parameters={
+                    "location": location,
+                    "tags": default_tags
+                }
             )
             return resource_group
         except Exception as e:
@@ -143,6 +169,100 @@ class AzureClient:
             return [resource for resource in resources]
         except Exception as e:
             raise Exception(f"Failed to list resources: {str(e)}")
+    
+    def validate_resource_group_name(self, name: str) -> Dict:
+        """Validate that a resource group name is available and follows naming conventions"""
+        try:
+            # Check if resource group already exists
+            existing_rg = self.get_resource_group(name)
+            if existing_rg:
+                return {
+                    "is_valid": False,
+                    "error": "Resource group already exists",
+                    "suggestion": f"Choose a different name or use the existing resource group '{name}'"
+                }
+            
+            # Validate naming conventions
+            if len(name) < 1 or len(name) > 90:
+                return {
+                    "is_valid": False,
+                    "error": "Resource group name must be 1-90 characters long"
+                }
+            
+            # Check for invalid characters
+            import re
+            if not re.match(r'^[a-zA-Z0-9._-]+$', name):
+                return {
+                    "is_valid": False,
+                    "error": "Resource group name can only contain letters, numbers, periods, underscores, and hyphens"
+                }
+            
+            # Check if name ends with period
+            if name.endswith('.'):
+                return {
+                    "is_valid": False,
+                    "error": "Resource group name cannot end with a period"
+                }
+            
+            return {
+                "is_valid": True,
+                "message": "Resource group name is available"
+            }
+            
+        except Exception as e:
+            return {
+                "is_valid": False,
+                "error": f"Validation failed: {str(e)}"
+            }
+
+    def delete_resource_group(self, name: str) -> Dict:
+        """Delete a resource group and all its resources"""
+        try:
+            print(f"Deleting resource group: {name}")
+            delete_operation = self.resource_client.resource_groups.begin_delete(name)
+            print(f"Delete operation initiated: {delete_operation}")
+            
+            return {
+                "success": True,
+                "operation": delete_operation,
+                "message": "Resource group deletion initiated successfully"
+            }
+        except Exception as e:
+            print(f"Error deleting resource group {name}: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "message": f"Failed to initiate deletion: {str(e)}"
+            }
+
+    def check_delete_status(self, operation) -> Dict:
+        """Check the status of a delete operation"""
+        try:
+            if operation.done():
+                if operation.result():
+                    return {
+                        "status": "completed",
+                        "success": True,
+                        "message": "Resource group deleted successfully"
+                    }
+                else:
+                    return {
+                        "status": "failed",
+                        "success": False,
+                        "message": "Resource group deletion failed"
+                    }
+            else:
+                return {
+                    "status": "running",
+                    "success": True,
+                    "message": "Resource group deletion in progress..."
+                }
+        except Exception as e:
+            return {
+                "status": "error",
+                "success": False,
+                "message": f"Error checking delete status: {str(e)}"
+            }
     
     def get_available_regions(self) -> List[Dict]:
         """Get all available Azure regions"""

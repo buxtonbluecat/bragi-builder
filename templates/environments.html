@@ -58,8 +58,11 @@ function loadEnvironments() {
 function displayEnvironments(resourceGroups) {
     const container = document.getElementById('environments-list');
     
-    // Filter resource groups that match our naming pattern (project-environment-rg)
-    const environments = resourceGroups.filter(rg => rg.name.endsWith('-rg'));
+    // Filter resource groups that were created by Bragi Builder
+    const environments = resourceGroups.filter(rg => {
+        // Check if this resource group has the Bragi Builder tag
+        return rg.tags && rg.tags.CreatedBy === 'Bragi Builder';
+    });
     
     if (environments.length === 0) {
         container.innerHTML = '<div class="alert alert-info">No environments found.</div>';
@@ -69,9 +72,19 @@ function displayEnvironments(resourceGroups) {
     let html = '<div class="row">';
     
     environments.forEach(env => {
-        const parts = env.name.split('-');
-        const projectName = parts.slice(0, -2).join('-');
-        const environment = parts[parts.length - 2];
+        // Get project and environment from tags, fallback to name parsing
+        let projectName = env.tags?.Project || 'Unknown Project';
+        let environment = env.tags?.Environment || 'Unknown Environment';
+        let deploymentType = env.tags?.DeploymentType || 'Unknown';
+        
+        // If we have a complete environment deployment, try to parse from name
+        if (deploymentType === 'Complete Environment' && env.name.includes('-')) {
+            const parts = env.name.split('-');
+            if (parts.length >= 3 && parts[parts.length - 1] === 'rg') {
+                projectName = parts.slice(0, -2).join('-');
+                environment = parts[parts.length - 2];
+            }
+        }
         
         html += `
             <div class="col-md-6 col-lg-4 mb-3">
@@ -82,16 +95,18 @@ function displayEnvironments(resourceGroups) {
                             <small class="text-muted">
                                 Resource Group: ${env.name}<br>
                                 Location: ${env.location}<br>
+                                Type: <span class="badge bg-info">${deploymentType}</span><br>
                                 Status: <span class="badge bg-success">Active</span>
+                                ${env.tags?.CreatedDate ? '<br>Created: ' + env.tags.CreatedDate : ''}
                             </small>
                         </p>
                     </div>
                     <div class="card-footer">
                         <div class="btn-group w-100" role="group">
-                            <button class="btn btn-outline-primary btn-sm" onclick="viewEndpoints('${environment}', '${projectName}')">
+                            <button class="btn btn-outline-primary btn-sm" onclick="viewEndpoints('${environment}', '${projectName}', '${env.name}')">
                                 <i class="bi bi-eye"></i> Endpoints
                             </button>
-                            <button class="btn btn-outline-danger btn-sm" onclick="deleteEnvironment('${environment}', '${projectName}')">
+                            <button class="btn btn-outline-danger btn-sm" onclick="deleteEnvironment('${environment}', '${projectName}', '${env.name}')">
                                 <i class="bi bi-trash"></i> Delete
                             </button>
                         </div>
@@ -105,14 +120,17 @@ function displayEnvironments(resourceGroups) {
     container.innerHTML = html;
 }
 
-function viewEndpoints(environment, projectName) {
-    window.open(`/environments/${environment}/endpoints?project_name=${projectName}`, '_blank');
+function viewEndpoints(environment, projectName, resourceGroupName) {
+    window.open(`/environments/${environment}/endpoints?project_name=${projectName}&resource_group=${resourceGroupName}`, '_blank');
 }
 
-function deleteEnvironment(environment, projectName) {
+function deleteEnvironment(environment, projectName, resourceGroupName) {
     if (!confirm(`Are you sure you want to delete the environment '${environment}' in project '${projectName}'?\n\nThis will delete the entire resource group and all resources. This action cannot be undone!`)) {
         return;
     }
+    
+    // Show loading state
+    showDeleteProgress(environment, resourceGroupName);
     
     fetch(`/environments/${environment}?project_name=${projectName}`, {
         method: 'DELETE'
@@ -120,14 +138,137 @@ function deleteEnvironment(environment, projectName) {
     .then(response => response.json())
     .then(data => {
         if (data.success) {
-            alert('Environment deletion started successfully! This may take several minutes to complete.');
-            loadEnvironments(); // Refresh the list
+            if (data.status === 'running') {
+                showDeleteProgress(environment, resourceGroupName, 'Deletion initiated...');
+                // Start polling for progress
+                pollDeleteProgress(resourceGroupName, environment);
+            } else {
+                hideDeleteProgress();
+                showSuccessNotification(data.message);
+                loadEnvironments(); // Refresh the list
+            }
         } else {
-            alert('Error deleting environment: ' + data.message);
+            hideDeleteProgress();
+            showErrorNotification(data.message);
         }
     })
     .catch(error => {
-        alert('Error deleting environment: ' + error.message);
+        hideDeleteProgress();
+        showErrorNotification('Error deleting environment: ' + error.message);
+    });
+}
+
+function showDeleteProgress(environment, resourceGroupName, message = 'Deleting environment...') {
+    // Create or update progress indicator
+    let progressDiv = document.getElementById('delete-progress');
+    if (!progressDiv) {
+        progressDiv = document.createElement('div');
+        progressDiv.id = 'delete-progress';
+        progressDiv.className = 'alert alert-info position-fixed';
+        progressDiv.style.cssText = 'top: 20px; right: 20px; z-index: 9999; min-width: 300px;';
+        document.body.appendChild(progressDiv);
+    }
+    
+    progressDiv.innerHTML = `
+        <div class="d-flex align-items-center">
+            <div class="spinner-border spinner-border-sm me-2" role="status">
+                <span class="visually-hidden">Loading...</span>
+            </div>
+            <div>
+                <strong>${message}</strong><br>
+                <small>Environment: ${environment}</small>
+            </div>
+        </div>
+    `;
+    progressDiv.style.display = 'block';
+}
+
+function hideDeleteProgress() {
+    const progressDiv = document.getElementById('delete-progress');
+    if (progressDiv) {
+        progressDiv.style.display = 'none';
+    }
+}
+
+function pollDeleteProgress(resourceGroupName, environment) {
+    const checkProgress = () => {
+        fetch(`/api/delete-progress/${resourceGroupName}`)
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                if (data.status === 'completed') {
+                    hideDeleteProgress();
+                    showSuccessNotification(data.message);
+                    loadEnvironments(); // Refresh the list
+                } else if (data.status === 'failed') {
+                    hideDeleteProgress();
+                    showErrorNotification(data.message);
+                } else if (data.status === 'running') {
+                    // Update progress message
+                    showDeleteProgress(environment, resourceGroupName, data.message);
+                    // Continue polling
+                    setTimeout(checkProgress, 2000); // Check every 2 seconds
+                }
+            } else {
+                hideDeleteProgress();
+                showErrorNotification(data.message);
+            }
+        })
+        .catch(error => {
+            hideDeleteProgress();
+            showErrorNotification('Error checking delete progress: ' + error);
+        });
+    };
+    
+    // Start polling
+    setTimeout(checkProgress, 2000);
+}
+
+function showSuccessNotification(message) {
+    // Create toast notification
+    const toast = document.createElement('div');
+    toast.className = 'toast align-items-center text-white bg-success border-0 position-fixed';
+    toast.style.cssText = 'top: 20px; right: 20px; z-index: 10000;';
+    toast.innerHTML = `
+        <div class="d-flex">
+            <div class="toast-body">
+                <i class="fas fa-check-circle me-2"></i>${message}
+            </div>
+            <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button>
+        </div>
+    `;
+    document.body.appendChild(toast);
+    
+    const bsToast = new bootstrap.Toast(toast);
+    bsToast.show();
+    
+    // Remove from DOM after hiding
+    toast.addEventListener('hidden.bs.toast', () => {
+        toast.remove();
+    });
+}
+
+function showErrorNotification(message) {
+    // Create toast notification
+    const toast = document.createElement('div');
+    toast.className = 'toast align-items-center text-white bg-danger border-0 position-fixed';
+    toast.style.cssText = 'top: 20px; right: 20px; z-index: 10000;';
+    toast.innerHTML = `
+        <div class="d-flex">
+            <div class="toast-body">
+                <i class="fas fa-exclamation-circle me-2"></i>${message}
+            </div>
+            <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button>
+        </div>
+    `;
+    document.body.appendChild(toast);
+    
+    const bsToast = new bootstrap.Toast(toast);
+    bsToast.show();
+    
+    // Remove from DOM after hiding
+    toast.addEventListener('hidden.bs.toast', () => {
+        toast.remove();
     });
 }
 </script>

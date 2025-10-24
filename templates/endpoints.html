@@ -1,0 +1,193 @@
+{% extends "base.html" %}
+
+{% block title %}Environment Endpoints - Bragi Builder{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <div class="row">
+        <div class="col-12">
+            <div class="d-flex justify-content-between align-items-center mb-4">
+                <h2>Environment Endpoints</h2>
+                <button class="btn btn-outline-secondary" onclick="window.close()">
+                    <i class="fas fa-times"></i> Close
+                </button>
+            </div>
+            
+            <div class="alert alert-info">
+                <i class="fas fa-info-circle"></i>
+                <strong>Environment:</strong> {{ environment }} | 
+                <strong>Project:</strong> {{ project_name }} | 
+                <strong>Resource Group:</strong> {{ resource_group_name }}
+            </div>
+        </div>
+    </div>
+
+    <div class="row">
+        <!-- App Service -->
+        {% if endpoints.app_service %}
+        <div class="col-md-6 mb-4">
+            <div class="card">
+                <div class="card-header bg-primary text-white">
+                    <h5 class="mb-0">
+                        <i class="fas fa-globe"></i> App Service
+                    </h5>
+                </div>
+                <div class="card-body">
+                    <h6>{{ endpoints.app_service.name }}</h6>
+                    <p class="mb-2">
+                        <strong>URL:</strong> 
+                        <a href="{{ endpoints.app_service.url }}" target="_blank" class="text-decoration-none">
+                            {{ endpoints.app_service.url }}
+                            <i class="fas fa-external-link-alt"></i>
+                        </a>
+                    </p>
+                    <p class="mb-2">
+                        <strong>Hostname:</strong> {{ endpoints.app_service.hostname }}
+                    </p>
+                    <p class="mb-2">
+                        <strong>State:</strong> 
+                        <span class="badge bg-{{ 'success' if endpoints.app_service.state == 'Running' else 'warning' }}">
+                            {{ endpoints.app_service.state }}
+                        </span>
+                    </p>
+                    <p class="mb-0">
+                        <strong>HTTPS Only:</strong> 
+                        <span class="badge bg-{{ 'success' if endpoints.app_service.https_only else 'warning' }}">
+                            {{ 'Yes' if endpoints.app_service.https_only else 'No' }}
+                        </span>
+                    </p>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- Storage Account -->
+        {% if endpoints.storage_account %}
+        <div class="col-md-6 mb-4">
+            <div class="card">
+                <div class="card-header bg-success text-white">
+                    <h5 class="mb-0">
+                        <i class="fas fa-database"></i> Storage Account
+                    </h5>
+                </div>
+                <div class="card-body">
+                    <h6>{{ endpoints.storage_account.name }}</h6>
+                    <p class="mb-2">
+                        <strong>Primary Endpoint:</strong> 
+                        <a href="{{ endpoints.storage_account.primary_endpoint }}" target="_blank" class="text-decoration-none">
+                            {{ endpoints.storage_account.primary_endpoint }}
+                            <i class="fas fa-external-link-alt"></i>
+                        </a>
+                    </p>
+                    <p class="mb-2">
+                        <strong>Location:</strong> {{ endpoints.storage_account.primary_location }}
+                    </p>
+                    <p class="mb-0">
+                        <strong>Status:</strong> 
+                        <span class="badge bg-{{ 'success' if endpoints.storage_account.status == 'available' else 'warning' }}">
+                            {{ endpoints.storage_account.status }}
+                        </span>
+                    </p>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- SQL Server -->
+        {% if endpoints.sql_server %}
+        <div class="col-md-6 mb-4">
+            <div class="card">
+                <div class="card-header bg-warning text-dark">
+                    <h5 class="mb-0">
+                        <i class="fas fa-server"></i> SQL Server
+                    </h5>
+                </div>
+                <div class="card-body">
+                    <h6>{{ endpoints.sql_server.name }}</h6>
+                    <p class="mb-2">
+                        <strong>FQDN:</strong> {{ endpoints.sql_server.fqdn }}
+                    </p>
+                    <p class="mb-2">
+                        <strong>Version:</strong> {{ endpoints.sql_server.version }}
+                    </p>
+                    <p class="mb-0">
+                        <strong>State:</strong> 
+                        <span class="badge bg-{{ 'success' if endpoints.sql_server.state == 'Ready' else 'warning' }}">
+                            {{ endpoints.sql_server.state }}
+                        </span>
+                    </p>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- Virtual Network -->
+        {% if endpoints.vnet %}
+        <div class="col-md-6 mb-4">
+            <div class="card">
+                <div class="card-header bg-info text-white">
+                    <h5 class="mb-0">
+                        <i class="fas fa-network-wired"></i> Virtual Network
+                    </h5>
+                </div>
+                <div class="card-body">
+                    <h6>{{ endpoints.vnet.name }}</h6>
+                    <p class="mb-2">
+                        <strong>Address Space:</strong> 
+                        {% for prefix in endpoints.vnet.address_space %}
+                            <span class="badge bg-secondary me-1">{{ prefix }}</span>
+                        {% endfor %}
+                    </p>
+                    <p class="mb-0">
+                        <strong>Subnets:</strong> 
+                        {% for subnet in endpoints.vnet.subnets %}
+                            <span class="badge bg-light text-dark me-1">{{ subnet }}</span>
+                        {% endfor %}
+                    </p>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- Public IPs -->
+        {% if endpoints.public_ips %}
+        <div class="col-12 mb-4">
+            <div class="card">
+                <div class="card-header bg-secondary text-white">
+                    <h5 class="mb-0">
+                        <i class="fas fa-globe-americas"></i> Public IP Addresses
+                    </h5>
+                </div>
+                <div class="card-body">
+                    {% for ip in endpoints.public_ips %}
+                    <div class="row mb-2">
+                        <div class="col-md-6">
+                            <strong>{{ ip.name }}:</strong> {{ ip.ip_address }}
+                        </div>
+                        <div class="col-md-6">
+                            <span class="badge bg-{{ 'success' if ip.state == 'Succeeded' else 'warning' }}">
+                                {{ ip.state }}
+                            </span>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+
+    <!-- No endpoints found -->
+    {% if not endpoints.app_service and not endpoints.storage_account and not endpoints.sql_server and not endpoints.vnet and not endpoints.public_ips %}
+    <div class="row">
+        <div class="col-12">
+            <div class="alert alert-warning text-center">
+                <i class="fas fa-exclamation-triangle fa-2x mb-3"></i>
+                <h4>No Endpoints Found</h4>
+                <p class="mb-0">This environment doesn't have any public-facing endpoints or the resources haven't been deployed yet.</p>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

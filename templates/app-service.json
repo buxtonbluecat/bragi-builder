@@ -54,7 +54,7 @@
       "location": "[parameters('location')]",
       "sku": {
         "name": "[parameters('sku')]",
-        "tier": "[if(equals(parameters('sku'), 'F1'), 'Free', if(contains(parameters('sku'), 'B'), 'Basic', if(contains(parameters('sku'), 'S'), 'Standard', 'Premium'))]"
+        "tier": "[if(equals(parameters('sku'), 'F1'), 'Free', 'Basic')]"
       },
       "kind": "linux",
       "properties": {

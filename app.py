@@ -74,6 +74,12 @@ def monitor_deployment_status(deployment_name, resource_group_name):
                 deployment_statuses[deployment_name]['elapsed_time'] = elapsed_time
                 deployment_statuses[deployment_name]['status_message'] = status_message
                 
+                # Also update deployment manager's tracking
+                if deployment_name in deployment_manager.deployments:
+                    deployment_manager.deployments[deployment_name]['status'] = current_status
+                    deployment_manager.deployments[deployment_name]['timestamp'] = current_time.isoformat()
+                    deployment_manager.deployments[deployment_name]['outputs'] = status.get('outputs', {})
+                
                 # Only emit if status changed or every 30 seconds
                 if current_status != last_status or status_count % 6 == 0:
                     socketio.emit('deployment_update', {
@@ -102,6 +108,14 @@ def monitor_deployment_status(deployment_name, resource_group_name):
                                 print(f"Deployment {deployment_name} failed with {len(error_details)} error(s)")
                         except Exception as e:
                             print(f"Could not get error details: {e}")
+                    
+                    # Update deployment manager's final status
+                    if deployment_name in deployment_manager.deployments:
+                        deployment_manager.deployments[deployment_name]['status'] = current_status
+                        deployment_manager.deployments[deployment_name]['timestamp'] = current_time.isoformat()
+                        deployment_manager.deployments[deployment_name]['outputs'] = status.get('outputs', {})
+                        if error_details:
+                            deployment_manager.deployments[deployment_name]['error_details'] = error_details
                     
                     # Send final status update
                     final_update = {

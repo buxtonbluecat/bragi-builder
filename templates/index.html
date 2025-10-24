@@ -230,8 +230,8 @@ document.addEventListener('DOMContentLoaded', function() {
     // Load environment count
     loadEnvironmentCount();
     
-    // Initialize running deployments display
-    updateRunningDeployments();
+    // Initialize all dashboard counters
+    updateDashboardStats();
     
     // Initialize WebSocket connection
     const socket = io();
@@ -320,9 +320,12 @@ function updateDeploymentStatus(data) {
         }
     });
     
-    // If deployment completed, update total count
+    // If deployment completed, update all dashboard stats
     if (data.completed) {
-        updateTotalDeployments();
+        updateDashboardStats();
+        
+        // Show completion notification
+        showCompletionNotification(data);
     }
 }
 
@@ -361,12 +364,40 @@ function updateTotalDeployments() {
     }
 }
 
+function updateSuccessfulDeployments() {
+    // Count successful deployments
+    const badges = Array.from(document.querySelectorAll('.deployment-item .status-badge'));
+    const successfulCount = badges.filter(badge => {
+        const status = badge.textContent.toLowerCase();
+        return status === 'succeeded';
+    }).length;
+    
+    const successfulElement = document.getElementById('successful-deployments');
+    if (successfulElement) {
+        successfulElement.textContent = successfulCount;
+    }
+}
+
+function updateFailedDeployments() {
+    // Count failed deployments
+    const badges = Array.from(document.querySelectorAll('.deployment-item .status-badge'));
+    const failedCount = badges.filter(badge => {
+        const status = badge.textContent.toLowerCase();
+        return status === 'failed';
+    }).length;
+    
+    const failedElement = document.getElementById('failed-deployments');
+    if (failedElement) {
+        failedElement.textContent = failedCount;
+    }
+}
+
 function updateDashboardStats() {
-    // Reload the page to get updated stats
-    // In a real implementation, you'd update the specific counters
-    setTimeout(() => {
-        location.reload();
-    }, 2000);
+    // Update individual counters without reloading the page
+    updateTotalDeployments();
+    updateSuccessfulDeployments();
+    updateFailedDeployments();
+    updateRunningDeployments();
 }
 
 function getStatusColor(status) {
@@ -376,6 +407,31 @@ function getStatusColor(status) {
         case 'Running': case 'Accepted': case 'Creating': case 'Updating': return 'warning';
         default: return 'secondary';
     }
+}
+
+function showCompletionNotification(data) {
+    // Show completion notification
+    const alertClass = data.status === 'Succeeded' ? 'alert-success' : 
+                      data.status === 'Failed' ? 'alert-danger' : 'alert-warning';
+    
+    const alertDiv = document.createElement('div');
+    alertDiv.className = `alert ${alertClass} alert-dismissible fade show`;
+    alertDiv.innerHTML = `
+        <strong>Deployment ${data.status}:</strong> ${data.deployment_name}
+        ${data.status_message ? `<br><small>${data.status_message}</small>` : ''}
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    `;
+    
+    // Insert at the top of the content
+    const content = document.querySelector('.container');
+    content.insertBefore(alertDiv, content.firstChild);
+    
+    // Auto-dismiss after 5 seconds
+    setTimeout(() => {
+        if (alertDiv.parentNode) {
+            alertDiv.remove();
+        }
+    }, 5000);
 }
 
 function showDeploymentError(data) {

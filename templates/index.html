@@ -61,47 +61,65 @@
             </div>
         </div>
     </div>
-    <div class="col-lg-2 col-md-4 col-sm-6 mb-3">
+</div>
+
+<!-- Success Metrics Row -->
+<div class="row mb-4">
+    <div class="col-lg-3 col-md-6 mb-3">
         <div class="card text-white bg-success h-100">
             <div class="card-body">
                 <div class="d-flex justify-content-between">
                     <div>
-                        <h4 class="card-title" id="successful-deployments">{{ deployments|selectattr('status', 'equalto', 'Succeeded')|list|length }}</h4>
-                        <p class="card-text">Successful</p>
+                        <h4 class="card-title" id="success-rate">-</h4>
+                        <p class="card-text">Success Rate</p>
                     </div>
                     <div class="align-self-center">
-                        <i class="fas fa-check-circle fa-2x"></i>
+                        <i class="fas fa-percentage fa-2x"></i>
                     </div>
                 </div>
             </div>
         </div>
     </div>
-    <div class="col-lg-2 col-md-4 col-sm-6 mb-3">
+    <div class="col-lg-3 col-md-6 mb-3">
+        <div class="card text-white bg-info h-100">
+            <div class="card-body">
+                <div class="d-flex justify-content-between">
+                    <div>
+                        <h4 class="card-title" id="avg-deployment-time">-</h4>
+                        <p class="card-text">Avg. Time</p>
+                    </div>
+                    <div class="align-self-center">
+                        <i class="fas fa-clock fa-2x"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-lg-3 col-md-6 mb-3">
         <div class="card text-white bg-warning h-100">
             <div class="card-body">
                 <div class="d-flex justify-content-between">
                     <div>
-                        <h4 class="card-title" id="running-deployments">{{ deployments|selectattr('status', 'equalto', 'running')|list|length }}</h4>
-                        <p class="card-text">Running</p>
+                        <h4 class="card-title" id="recent-deployments-7d">-</h4>
+                        <p class="card-text">Last 7 Days</p>
                     </div>
                     <div class="align-self-center">
-                        <i class="fas fa-spinner fa-2x" id="running-spinner" style="display: none;"></i>
-                        <i class="fas fa-play-circle fa-2x" id="running-icon"></i>
+                        <i class="fas fa-calendar-week fa-2x"></i>
                     </div>
                 </div>
             </div>
         </div>
     </div>
-    <div class="col-lg-2 col-md-4 col-sm-6 mb-3">
-        <div class="card text-white bg-danger h-100">
+    <div class="col-lg-3 col-md-6 mb-3">
+        <div class="card text-white bg-primary h-100">
             <div class="card-body">
                 <div class="d-flex justify-content-between">
                     <div>
-                        <h4 class="card-title" id="failed-deployments">{{ deployments|selectattr('status', 'equalto', 'Failed')|list|length }}</h4>
-                        <p class="card-text">Failed</p>
+                        <h4 class="card-title" id="active-resources">-</h4>
+                        <p class="card-text">Active Resources</p>
                     </div>
                     <div class="align-self-center">
-                        <i class="fas fa-exclamation-circle fa-2x"></i>
+                        <i class="fas fa-cogs fa-2x"></i>
                     </div>
                 </div>
             </div>
@@ -364,40 +382,93 @@ function updateTotalDeployments() {
     }
 }
 
-function updateSuccessfulDeployments() {
-    // Count successful deployments
-    const badges = Array.from(document.querySelectorAll('.deployment-item .status-badge'));
-    const successfulCount = badges.filter(badge => {
-        const status = badge.textContent.toLowerCase();
-        return status === 'succeeded';
-    }).length;
-    
-    const successfulElement = document.getElementById('successful-deployments');
-    if (successfulElement) {
-        successfulElement.textContent = successfulCount;
-    }
-}
-
-function updateFailedDeployments() {
-    // Count failed deployments
-    const badges = Array.from(document.querySelectorAll('.deployment-item .status-badge'));
-    const failedCount = badges.filter(badge => {
-        const status = badge.textContent.toLowerCase();
-        return status === 'failed';
-    }).length;
-    
-    const failedElement = document.getElementById('failed-deployments');
-    if (failedElement) {
-        failedElement.textContent = failedCount;
-    }
-}
-
 function updateDashboardStats() {
     // Update individual counters without reloading the page
     updateTotalDeployments();
-    updateSuccessfulDeployments();
-    updateFailedDeployments();
     updateRunningDeployments();
+    
+    // Load enhanced metrics from API
+    loadEnhancedMetrics();
+}
+
+function loadEnhancedMetrics() {
+    // Load success rate, average time, and other metrics
+    fetch('/api/metrics/statistics')
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                const stats = data.statistics;
+                
+                // Update success rate
+                const successRateElement = document.getElementById('success-rate');
+                if (successRateElement) {
+                    successRateElement.textContent = `${stats.success_rate.toFixed(1)}%`;
+                }
+                
+                // Update average deployment time
+                const avgTimeElement = document.getElementById('avg-deployment-time');
+                if (avgTimeElement) {
+                    avgTimeElement.textContent = stats.average_duration_formatted || 'N/A';
+                }
+                
+                // Update recent deployments (7 days)
+                const recentElement = document.getElementById('recent-deployments-7d');
+                if (recentElement) {
+                    recentElement.textContent = stats.recent_deployments_7_days || '0';
+                }
+                
+                // Update active resources count
+                loadActiveResourcesCount();
+            }
+        })
+        .catch(error => {
+            console.error('Error loading enhanced metrics:', error);
+        });
+}
+
+function loadActiveResourcesCount() {
+    // Load count of active resources across all resource groups
+    fetch('/resource-groups')
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                const bragiEnvironments = data.resource_groups.filter(rg => 
+                    rg.tags && rg.tags.CreatedBy === 'Bragi Builder'
+                );
+                
+                // Count total resources across all environments
+                let totalResources = 0;
+                const resourcePromises = bragiEnvironments.map(env => 
+                    fetch(`/api/resource-groups/${env.name}/status`)
+                        .then(response => response.json())
+                        .then(data => data.success ? data.total_resources : 0)
+                        .catch(() => 0)
+                );
+                
+                Promise.all(resourcePromises)
+                    .then(resourceCounts => {
+                        totalResources = resourceCounts.reduce((sum, count) => sum + count, 0);
+                        const activeResourcesElement = document.getElementById('active-resources');
+                        if (activeResourcesElement) {
+                            activeResourcesElement.textContent = totalResources;
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Error loading resource counts:', error);
+                        const activeResourcesElement = document.getElementById('active-resources');
+                        if (activeResourcesElement) {
+                            activeResourcesElement.textContent = '?';
+                        }
+                    });
+            }
+        })
+        .catch(error => {
+            console.error('Error loading active resources:', error);
+            const activeResourcesElement = document.getElementById('active-resources');
+            if (activeResourcesElement) {
+                activeResourcesElement.textContent = '?';
+            }
+        });
 }
 
 function getStatusColor(status) {

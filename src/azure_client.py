@@ -10,6 +10,7 @@ from azure.mgmt.web import WebSiteManagementClient
 from azure.mgmt.storage import StorageManagementClient
 from azure.mgmt.sql import SqlManagementClient
 from azure.mgmt.network import NetworkManagementClient
+from azure.mgmt.compute import ComputeManagementClient
 from azure.core.exceptions import ResourceNotFoundError
 
 
@@ -42,6 +43,10 @@ class AzureClient:
             self.subscription_id
         )
         self.network_client = NetworkManagementClient(
+            self.credential, 
+            self.subscription_id
+        )
+        self.compute_client = ComputeManagementClient(
             self.credential, 
             self.subscription_id
         )

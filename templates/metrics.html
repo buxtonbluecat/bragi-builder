@@ -1,0 +1,524 @@
+{% extends "base.html" %}
+
+{% block title %}Deployment Metrics - Bragi Builder{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row">
+        <div class="col-12">
+            <div class="d-flex justify-content-between align-items-center mb-4">
+                <h1><i class="fas fa-chart-line"></i> Deployment Metrics</h1>
+                <div>
+                    <button class="btn btn-outline-primary" onclick="refreshMetrics()">
+                        <i class="fas fa-sync-alt"></i> Refresh
+                    </button>
+                    <button class="btn btn-outline-secondary" onclick="exportMetrics()">
+                        <i class="fas fa-download"></i> Export
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Statistics Cards -->
+    <div class="row mb-4">
+        <div class="col-lg-3 col-md-6 mb-3">
+            <div class="card bg-primary text-white h-100">
+                <div class="card-body">
+                    <div class="d-flex justify-content-between">
+                        <div>
+                            <h4 class="card-title" id="total-deployments">-</h4>
+                            <p class="card-text">Total Deployments</p>
+                        </div>
+                        <div class="align-self-center">
+                            <i class="fas fa-rocket fa-2x"></i>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="col-lg-3 col-md-6 mb-3">
+            <div class="card bg-success text-white h-100">
+                <div class="card-body">
+                    <div class="d-flex justify-content-between">
+                        <div>
+                            <h4 class="card-title" id="success-rate">-</h4>
+                            <p class="card-text">Success Rate</p>
+                        </div>
+                        <div class="align-self-center">
+                            <i class="fas fa-check-circle fa-2x"></i>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="col-lg-3 col-md-6 mb-3">
+            <div class="card bg-info text-white h-100">
+                <div class="card-body">
+                    <div class="d-flex justify-content-between">
+                        <div>
+                            <h4 class="card-title" id="avg-duration">-</h4>
+                            <p class="card-text">Avg Duration</p>
+                        </div>
+                        <div class="align-self-center">
+                            <i class="fas fa-clock fa-2x"></i>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="col-lg-3 col-md-6 mb-3">
+            <div class="card bg-warning text-white h-100">
+                <div class="card-body">
+                    <div class="d-flex justify-content-between">
+                        <div>
+                            <h4 class="card-title" id="recent-deployments">-</h4>
+                            <p class="card-text">Last 7 Days</p>
+                        </div>
+                        <div class="align-self-center">
+                            <i class="fas fa-calendar-week fa-2x"></i>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Charts Row -->
+    <div class="row mb-4">
+        <div class="col-lg-8 mb-3">
+            <div class="card">
+                <div class="card-header">
+                    <h5 class="card-title mb-0">Deployment Trends (Last 30 Days)</h5>
+                </div>
+                <div class="card-body">
+                    <canvas id="trendsChart" height="300"></canvas>
+                </div>
+            </div>
+        </div>
+        
+        <div class="col-lg-4 mb-3">
+            <div class="card">
+                <div class="card-header">
+                    <h5 class="card-title mb-0">Template Usage</h5>
+                </div>
+                <div class="card-body">
+                    <canvas id="templateChart" height="300"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Filters and Deployments Table -->
+    <div class="row">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header">
+                    <div class="row align-items-center">
+                        <div class="col">
+                            <h5 class="card-title mb-0">Deployment History</h5>
+                        </div>
+                        <div class="col-auto">
+                            <div class="btn-group" role="group">
+                                <button type="button" class="btn btn-sm btn-outline-secondary" onclick="filterDeployments('all')">All</button>
+                                <button type="button" class="btn btn-sm btn-outline-success" onclick="filterDeployments('Succeeded')">Success</button>
+                                <button type="button" class="btn btn-sm btn-outline-danger" onclick="filterDeployments('Failed')">Failed</button>
+                                <button type="button" class="btn btn-sm btn-outline-warning" onclick="filterDeployments('Running')">Running</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="card-body">
+                    <div class="table-responsive">
+                        <table class="table table-hover" id="deploymentsTable">
+                            <thead class="table-light">
+                                <tr>
+                                    <th>Deployment</th>
+                                    <th>Template</th>
+                                    <th>Status</th>
+                                    <th>Duration</th>
+                                    <th>Resources</th>
+                                    <th>Start Time</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="deploymentsTableBody">
+                                <tr>
+                                    <td colspan="7" class="text-center">
+                                        <div class="spinner-border" role="status">
+                                            <span class="visually-hidden">Loading...</span>
+                                        </div>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Deployment Details Modal -->
+<div class="modal fade" id="deploymentModal" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Deployment Details</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body" id="deploymentModalBody">
+                <!-- Content will be loaded here -->
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+let trendsChart, templateChart;
+let currentFilter = 'all';
+
+document.addEventListener('DOMContentLoaded', function() {
+    loadStatistics();
+    loadDeployments();
+    loadTrends();
+    initializeCharts();
+});
+
+function loadStatistics() {
+    fetch('/api/metrics/statistics')
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                const stats = data.statistics;
+                document.getElementById('total-deployments').textContent = stats.total_deployments;
+                document.getElementById('success-rate').textContent = stats.success_rate + '%';
+                document.getElementById('avg-duration').textContent = stats.average_duration_formatted;
+                document.getElementById('recent-deployments').textContent = stats.recent_deployments_7_days;
+            }
+        })
+        .catch(error => {
+            console.error('Error loading statistics:', error);
+        });
+}
+
+function loadDeployments() {
+    const url = currentFilter === 'all' ? '/api/metrics/deployments' : `/api/metrics/deployments?status=${currentFilter}`;
+    
+    fetch(url)
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                displayDeployments(data.deployments);
+            }
+        })
+        .catch(error => {
+            console.error('Error loading deployments:', error);
+        });
+}
+
+function displayDeployments(deployments) {
+    const tbody = document.getElementById('deploymentsTableBody');
+    
+    if (deployments.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="7" class="text-center">No deployments found</td></tr>';
+        return;
+    }
+    
+    tbody.innerHTML = deployments.map(deployment => `
+        <tr>
+            <td>
+                <strong>${deployment.deployment_name}</strong><br>
+                <small class="text-muted">${deployment.resource_group}</small>
+            </td>
+            <td>
+                <span class="badge bg-secondary">${deployment.template_name}</span>
+            </td>
+            <td>
+                <span class="badge ${getStatusBadgeClass(deployment.status)}">${deployment.status}</span>
+            </td>
+            <td>${deployment.duration_formatted || '-'}</td>
+            <td>${deployment.resource_count || 0}</td>
+            <td>${deployment.start_time ? new Date(deployment.start_time).toLocaleString() : '-'}</td>
+            <td>
+                <button class="btn btn-sm btn-outline-primary" onclick="showDeploymentDetails('${deployment.deployment_name}')">
+                    <i class="fas fa-eye"></i>
+                </button>
+            </td>
+        </tr>
+    `).join('');
+}
+
+function loadTrends() {
+    fetch('/api/metrics/trends?days=30')
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                updateTrendsChart(data.trends.daily_trends);
+            }
+        })
+        .catch(error => {
+            console.error('Error loading trends:', error);
+        });
+}
+
+function initializeCharts() {
+    // Trends Chart
+    const trendsCtx = document.getElementById('trendsChart').getContext('2d');
+    trendsChart = new Chart(trendsCtx, {
+        type: 'line',
+        data: {
+            labels: [],
+            datasets: [{
+                label: 'Total',
+                data: [],
+                borderColor: 'rgb(75, 192, 192)',
+                backgroundColor: 'rgba(75, 192, 192, 0.2)',
+                tension: 0.1
+            }, {
+                label: 'Successful',
+                data: [],
+                borderColor: 'rgb(40, 167, 69)',
+                backgroundColor: 'rgba(40, 167, 69, 0.2)',
+                tension: 0.1
+            }, {
+                label: 'Failed',
+                data: [],
+                borderColor: 'rgb(220, 53, 69)',
+                backgroundColor: 'rgba(220, 53, 69, 0.2)',
+                tension: 0.1
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: {
+                y: {
+                    beginAtZero: true
+                }
+            }
+        }
+    });
+
+    // Template Chart
+    const templateCtx = document.getElementById('templateChart').getContext('2d');
+    templateChart = new Chart(templateCtx, {
+        type: 'doughnut',
+        data: {
+            labels: [],
+            datasets: [{
+                data: [],
+                backgroundColor: [
+                    '#4BC0C0',  // Teal
+                    '#9966FF',  // Purple
+                    '#FF9F40',  // Orange
+                    '#36A2EB',  // Blue
+                    '#FF6384',  // Pink
+                    '#FFCE56',  // Yellow
+                    '#4BC0C0',  // Teal (repeat for more templates)
+                    '#9966FF',  // Purple (repeat)
+                    '#FF9F40',  // Orange (repeat)
+                    '#36A2EB'   // Blue (repeat)
+                ]
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false
+        }
+    });
+}
+
+function updateTrendsChart(dailyTrends) {
+    const labels = dailyTrends.map(day => day.date);
+    const totalData = dailyTrends.map(day => day.total);
+    const successData = dailyTrends.map(day => day.successful);
+    const failedData = dailyTrends.map(day => day.failed);
+    
+    trendsChart.data.labels = labels;
+    trendsChart.data.datasets[0].data = totalData;
+    trendsChart.data.datasets[1].data = successData;
+    trendsChart.data.datasets[2].data = failedData;
+    trendsChart.update();
+}
+
+function loadTemplateChart() {
+    fetch('/api/metrics/statistics')
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                const templateUsage = data.statistics.template_usage;
+                const labels = Object.keys(templateUsage);
+                const values = Object.values(templateUsage);
+                
+                templateChart.data.labels = labels;
+                templateChart.data.datasets[0].data = values;
+                templateChart.update();
+            }
+        })
+        .catch(error => {
+            console.error('Error loading template chart:', error);
+        });
+}
+
+function filterDeployments(status) {
+    currentFilter = status;
+    loadDeployments();
+    
+    // Update button states
+    document.querySelectorAll('.btn-group button').forEach(btn => {
+        btn.classList.remove('active');
+    });
+    event.target.classList.add('active');
+}
+
+function showDeploymentDetails(deploymentName) {
+    fetch(`/api/metrics/deployment/${deploymentName}`)
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                displayDeploymentModal(data.deployment);
+            }
+        })
+        .catch(error => {
+            console.error('Error loading deployment details:', error);
+        });
+}
+
+function displayDeploymentModal(deployment) {
+    const modalBody = document.getElementById('deploymentModalBody');
+    
+    modalBody.innerHTML = `
+        <div class="row">
+            <div class="col-md-6">
+                <h6>Basic Information</h6>
+                <table class="table table-sm">
+                    <tr><td><strong>Name:</strong></td><td>${deployment.deployment_name}</td></tr>
+                    <tr><td><strong>Resource Group:</strong></td><td>${deployment.resource_group}</td></tr>
+                    <tr><td><strong>Template:</strong></td><td>${deployment.template_name}</td></tr>
+                    <tr><td><strong>Location:</strong></td><td>${deployment.location}</td></tr>
+                    <tr><td><strong>Status:</strong></td><td><span class="badge ${getStatusBadgeClass(deployment.status)}">${deployment.status}</span></td></tr>
+                </table>
+            </div>
+            <div class="col-md-6">
+                <h6>Timing</h6>
+                <table class="table table-sm">
+                    <tr><td><strong>Start Time:</strong></td><td>${deployment.start_time ? new Date(deployment.start_time).toLocaleString() : '-'}</td></tr>
+                    <tr><td><strong>End Time:</strong></td><td>${deployment.end_time ? new Date(deployment.end_time).toLocaleString() : '-'}</td></tr>
+                    <tr><td><strong>Duration:</strong></td><td>${deployment.duration_formatted || '-'}</td></tr>
+                    <tr><td><strong>Retry Count:</strong></td><td>${deployment.retry_count}</td></tr>
+                </table>
+            </div>
+        </div>
+        
+        <div class="row mt-3">
+            <div class="col-md-6">
+                <h6>Resources</h6>
+                <table class="table table-sm">
+                    <tr><td><strong>Resource Count:</strong></td><td>${deployment.resource_count}</td></tr>
+                    <tr><td><strong>Resource Types:</strong></td><td>${deployment.resource_types ? deployment.resource_types.join(', ') : '-'}</td></tr>
+                    <tr><td><strong>Estimated Cost:</strong></td><td>${deployment.estimated_cost ? '$' + deployment.estimated_cost : '-'}</td></tr>
+                </table>
+            </div>
+            <div class="col-md-6">
+                <h6>Validation</h6>
+                <table class="table table-sm">
+                    <tr><td><strong>Validation Passed:</strong></td><td><span class="badge ${deployment.validation_passed ? 'bg-success' : 'bg-danger'}">${deployment.validation_passed ? 'Yes' : 'No'}</span></td></tr>
+                    <tr><td><strong>VNet Address Space:</strong></td><td>${deployment.vnet_address_space || '-'}</td></tr>
+                    <tr><td><strong>SQL Password Complexity:</strong></td><td><span class="badge ${deployment.sql_password_complexity ? 'bg-success' : 'bg-danger'}">${deployment.sql_password_complexity ? 'Yes' : 'No'}</span></td></tr>
+                </table>
+            </div>
+        </div>
+        
+        ${deployment.error_details ? `
+        <div class="row mt-3">
+            <div class="col-12">
+                <h6>Error Details</h6>
+                <div class="alert alert-danger">
+                    <pre>${JSON.stringify(deployment.error_details, null, 2)}</pre>
+                </div>
+            </div>
+        </div>
+        ` : ''}
+        
+        ${deployment.parameters ? `
+        <div class="row mt-3">
+            <div class="col-12">
+                <h6>Parameters</h6>
+                <div class="alert alert-info">
+                    <pre>${JSON.stringify(deployment.parameters, null, 2)}</pre>
+                </div>
+            </div>
+        </div>
+        ` : ''}
+    `;
+    
+    new bootstrap.Modal(document.getElementById('deploymentModal')).show();
+}
+
+function getStatusBadgeClass(status) {
+    switch(status) {
+        case 'Succeeded': return 'bg-success';
+        case 'Failed': return 'bg-danger';
+        case 'Running': return 'bg-warning';
+        case 'Canceled': return 'bg-secondary';
+        default: return 'bg-secondary';
+    }
+}
+
+function refreshMetrics() {
+    loadStatistics();
+    loadDeployments();
+    loadTrends();
+    loadTemplateChart();
+}
+
+function exportMetrics() {
+    // Simple CSV export
+    fetch('/api/metrics/deployments')
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                const csv = convertToCSV(data.deployments);
+                downloadCSV(csv, 'deployment-metrics.csv');
+            }
+        })
+        .catch(error => {
+            console.error('Error exporting metrics:', error);
+        });
+}
+
+function convertToCSV(deployments) {
+    const headers = ['Deployment Name', 'Resource Group', 'Template', 'Status', 'Duration', 'Start Time', 'End Time', 'Resource Count'];
+    const rows = deployments.map(d => [
+        d.deployment_name,
+        d.resource_group,
+        d.template_name,
+        d.status,
+        d.duration_formatted || '',
+        d.start_time || '',
+        d.end_time || '',
+        d.resource_count || 0
+    ]);
+    
+    return [headers, ...rows].map(row => row.map(field => `"${field}"`).join(',')).join('\n');
+}
+
+function downloadCSV(csv, filename) {
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    window.URL.revokeObjectURL(url);
+}
+
+// Load template chart after initial load
+setTimeout(loadTemplateChart, 1000);
+</script>
+{% endblock %}

@@ -6,6 +6,7 @@ import os
 import json
 import threading
 import time
+import datetime
 from flask import Flask, render_template, request, jsonify, redirect, url_for, flash
 from flask_socketio import SocketIO, emit
 from dotenv import load_dotenv
@@ -16,6 +17,8 @@ from src.offline_review import OfflineReviewManager
 from src.workload_config import WorkloadConfigManager
 from src.template_wizard import TemplateWizard
 from src.vnet_validator import VNetValidator
+from src.deployment_store import DeploymentStore, DeploymentRecord
+from src.metrics_dashboard import metrics_bp
 
 # Load environment variables
 load_dotenv()
@@ -43,8 +46,101 @@ offline_review = OfflineReviewManager()
 workload_config = WorkloadConfigManager()
 template_wizard = TemplateWizard()
 
+# Initialize deployment store
+deployment_store = DeploymentStore()
+
+# Register blueprints
+app.register_blueprint(metrics_bp)
+
 # Deployment status tracking
 deployment_statuses = {}
+
+def record_deployment_start(deployment_name, resource_group_name, template_name, deployment_data):
+    """Record deployment start in the data store"""
+    try:
+        # Create initial deployment record
+        record = DeploymentRecord(
+            deployment_name=deployment_name,
+            resource_group=resource_group_name,
+            template_name=template_name,
+            location=deployment_data.get('location', 'unknown'),
+            project=deployment_data.get('project', 'unknown'),
+            environment=deployment_data.get('environment', 'unknown'),
+            status='Running',
+            start_time=datetime.datetime.now(),
+            end_time=None,
+            duration_seconds=None,
+            user_initiated='system',  # Could be enhanced with actual user tracking
+            parameters=deployment_data.get('parameters', {}),
+            outputs=None,
+            error_details=None,
+            resource_count=0,  # Will be updated when deployment completes
+            resource_types=None,  # Will be updated when deployment completes
+            retry_count=0,
+            estimated_cost=None,  # Could be enhanced with cost estimation
+            validation_passed=True,  # Could be enhanced with validation tracking
+            vnet_address_space=deployment_data.get('vnet_address_space'),
+            sql_password_complexity=deployment_data.get('sql_password_complexity', True)
+        )
+        
+        # Create the record
+        deployment_store.create_deployment(record)
+        
+    except Exception as e:
+        print(f"Error recording deployment start: {e}")
+
+def record_deployment_completion(deployment_name, resource_group_name, status, duration_seconds, outputs, error_details):
+    """Record deployment completion in the data store"""
+    try:
+        # Get deployment info from deployment manager
+        deployment_info = None
+        if deployment_manager and deployment_name in deployment_manager.deployments:
+            deployment_info = deployment_manager.deployments[deployment_name]
+        
+        # Create deployment record
+        record = DeploymentRecord(
+            deployment_name=deployment_name,
+            resource_group=resource_group_name,
+            template_name=deployment_info.get('template_name', 'unknown') if deployment_info else 'unknown',
+            location=deployment_info.get('location', 'unknown') if deployment_info else 'unknown',
+            project=deployment_info.get('project', 'unknown') if deployment_info else 'unknown',
+            environment=deployment_info.get('environment', 'unknown') if deployment_info else 'unknown',
+            status=status,
+            start_time=deployment_info.get('start_time') if deployment_info else None,
+            end_time=datetime.datetime.now(),
+            duration_seconds=duration_seconds,
+            user_initiated='system',  # Could be enhanced with actual user tracking
+            parameters=deployment_info.get('parameters') if deployment_info else None,
+            outputs=outputs,
+            error_details=error_details,
+            resource_count=0,  # Could be enhanced to count actual resources
+            resource_types=None,  # Could be enhanced to track resource types
+            retry_count=0,  # Could be enhanced to track retries
+            estimated_cost=None,  # Could be enhanced with cost estimation
+            validation_passed=True,  # Could be enhanced with validation tracking
+            vnet_address_space=None,  # Could be enhanced with VNet tracking
+            sql_password_complexity=True  # Could be enhanced with password validation tracking
+        )
+        
+        # Check if deployment already exists
+        existing = deployment_store.get_deployment(deployment_name)
+        if existing:
+            # Update existing record
+            updates = {
+                'status': status,
+                'end_time': record.end_time,
+                'duration_seconds': duration_seconds,
+                'outputs': outputs,
+                'error_details': error_details,
+                'updated_at': datetime.datetime.now()
+            }
+            deployment_store.update_deployment(deployment_name, updates)
+        else:
+            # Create new record
+            deployment_store.create_deployment(record)
+            
+    except Exception as e:
+        print(f"Error recording deployment completion: {e}")
 
 def monitor_deployment_status(deployment_name, resource_group_name):
     """Monitor deployment status and emit updates via WebSocket"""
@@ -116,6 +212,13 @@ def monitor_deployment_status(deployment_name, resource_group_name):
                         deployment_manager.deployments[deployment_name]['outputs'] = status.get('outputs', {})
                         if error_details:
                             deployment_manager.deployments[deployment_name]['error_details'] = error_details
+                    
+                    # Record deployment completion in data store
+                    try:
+                        record_deployment_completion(deployment_name, resource_group_name, current_status, 
+                                                   elapsed_time, status.get('outputs', {}), error_details)
+                    except Exception as e:
+                        print(f"Error recording deployment completion: {e}")
                     
                     # Send final status update
                     final_update = {
@@ -268,6 +371,12 @@ def deployments():
                          templates=templates)
 
 
+@app.route('/metrics')
+def metrics():
+    """Metrics dashboard page"""
+    return render_template('metrics.html')
+
+
 @app.route('/deploy', methods=['POST'])
 def deploy():
     """Deploy a template"""
@@ -354,6 +463,12 @@ def deploy():
                 'started': True,
                 'completed': False
             }
+            
+            # Record deployment start in data store
+            try:
+                record_deployment_start(deployment_name, resource_group, template_name, data)
+            except Exception as e:
+                print(f"Error recording deployment start: {e}")
             
             # Start monitoring in a separate thread
             monitor_thread = threading.Thread(
@@ -658,6 +773,223 @@ def check_delete_progress(resource_group):
         return jsonify(result)
     except Exception as e:
         return jsonify({"success": False, "message": str(e)}), 500
+
+@app.route('/api/resource-groups/<resource_group>/start', methods=['POST'])
+def start_resource_group(resource_group):
+    """Start all resources in a resource group"""
+    if not azure_client:
+        return jsonify({"success": False, "message": "Azure client not configured"}), 400
+    
+    try:
+        # Get all resources in the resource group
+        resources = azure_client.resource_client.resources.list_by_resource_group(resource_group)
+        
+        start_operations = []
+        for resource in resources:
+            try:
+                # Check if resource supports start/stop operations
+                if resource.type in ['Microsoft.Compute/virtualMachines', 'Microsoft.Web/sites', 'Microsoft.Network/applicationGateways']:
+                    if resource.type == 'Microsoft.Compute/virtualMachines':
+                        # Start VM
+                        operation = azure_client.compute_client.virtual_machines.begin_start(
+                            resource_group, resource.name
+                        )
+                        start_operations.append({
+                            'resource_name': resource.name,
+                            'resource_type': resource.type,
+                            'operation': operation
+                        })
+                    elif resource.type == 'Microsoft.Web/sites':
+                        # Start App Service
+                        operation = azure_client.web_client.web_apps.start(
+                            resource_group, resource.name
+                        )
+                        start_operations.append({
+                            'resource_name': resource.name,
+                            'resource_type': resource.type,
+                            'operation': operation
+                        })
+                    elif resource.type == 'Microsoft.Network/applicationGateways':
+                        # Start Application Gateway
+                        operation = azure_client.network_client.application_gateways.begin_start(
+                            resource_group, resource.name
+                        )
+                        start_operations.append({
+                            'resource_name': resource.name,
+                            'resource_type': resource.type,
+                            'operation': operation
+                        })
+            except Exception as e:
+                print(f"Error starting {resource.name}: {e}")
+                continue
+        
+        return jsonify({
+            "success": True,
+            "message": f"Started {len(start_operations)} resources in {resource_group}",
+            "operations": len(start_operations)
+        })
+        
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "message": f"Error starting resources: {str(e)}"
+        }), 500
+
+@app.route('/api/resource-groups/<resource_group>/stop', methods=['POST'])
+def stop_resource_group(resource_group):
+    """Stop all resources in a resource group"""
+    if not azure_client:
+        return jsonify({"success": False, "message": "Azure client not configured"}), 400
+    
+    try:
+        # Get all resources in the resource group
+        resources = azure_client.resource_client.resources.list_by_resource_group(resource_group)
+        
+        stop_operations = []
+        for resource in resources:
+            try:
+                # Check if resource supports start/stop operations
+                if resource.type in ['Microsoft.Compute/virtualMachines', 'Microsoft.Web/sites', 'Microsoft.Network/applicationGateways']:
+                    if resource.type == 'Microsoft.Compute/virtualMachines':
+                        # Stop VM
+                        operation = azure_client.compute_client.virtual_machines.begin_deallocate(
+                            resource_group, resource.name
+                        )
+                        stop_operations.append({
+                            'resource_name': resource.name,
+                            'resource_type': resource.type,
+                            'operation': operation
+                        })
+                    elif resource.type == 'Microsoft.Web/sites':
+                        # Stop App Service
+                        operation = azure_client.web_client.web_apps.stop(
+                            resource_group, resource.name
+                        )
+                        stop_operations.append({
+                            'resource_name': resource.name,
+                            'resource_type': resource.type,
+                            'operation': operation
+                        })
+                    elif resource.type == 'Microsoft.Network/applicationGateways':
+                        # Stop Application Gateway
+                        operation = azure_client.network_client.application_gateways.begin_stop(
+                            resource_group, resource.name
+                        )
+                        stop_operations.append({
+                            'resource_name': resource.name,
+                            'resource_type': resource.type,
+                            'operation': operation
+                        })
+            except Exception as e:
+                print(f"Error stopping {resource.name}: {e}")
+                continue
+        
+        return jsonify({
+            "success": True,
+            "message": f"Stopped {len(stop_operations)} resources in {resource_group}",
+            "operations": len(stop_operations)
+        })
+        
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "message": f"Error stopping resources: {str(e)}"
+        }), 500
+
+@app.route('/api/resource-groups/<resource_group>/status')
+def get_resource_group_status(resource_group):
+    """Get status of all resources in a resource group"""
+    if not azure_client:
+        return jsonify({"success": False, "message": "Azure client not configured"}), 400
+    
+    try:
+        # Get all resources in the resource group
+        resources = azure_client.resource_client.resources.list_by_resource_group(resource_group)
+        
+        resource_statuses = []
+        for resource in resources:
+            try:
+                status = "Unknown"
+                if resource.type == 'Microsoft.Compute/virtualMachines':
+                    # Get VM status
+                    vm = azure_client.compute_client.virtual_machines.get(
+                        resource_group, resource.name, expand='instanceView'
+                    )
+                    if vm.instance_view and vm.instance_view.statuses:
+                        for status_obj in vm.instance_view.statuses:
+                            if status_obj.code.startswith('PowerState/'):
+                                status = status_obj.code.split('/')[1]
+                                break
+                elif resource.type == 'Microsoft.Web/sites':
+                    # Get App Service status
+                    app = azure_client.web_client.web_apps.get(resource_group, resource.name)
+                    status = app.state
+                elif resource.type == 'Microsoft.Web/serverFarms':
+                    # App Service Plan status
+                    asp = azure_client.web_client.app_service_plans.get(resource_group, resource.name)
+                    status = asp.status
+                elif resource.type == 'Microsoft.Sql/servers':
+                    # SQL Server is always running
+                    status = "Running"
+                elif resource.type == 'Microsoft.Sql/servers/databases':
+                    # SQL Database status
+                    try:
+                        db_parts = resource.name.split('/')
+                        if len(db_parts) == 2:
+                            server_name, db_name = db_parts
+                            db = azure_client.sql_client.databases.get(resource_group, server_name, db_name)
+                            status = db.status
+                        else:
+                            status = "Running"
+                    except:
+                        status = "Running"
+                elif resource.type == 'Microsoft.Storage/storageAccounts':
+                    # Storage account is always running
+                    status = "Running"
+                elif resource.type == 'Microsoft.Network/virtualNetworks':
+                    # VNet is always running
+                    status = "Running"
+                elif resource.type == 'Microsoft.Network/publicIPAddresses':
+                    # Public IP is always running
+                    status = "Running"
+                elif resource.type == 'Microsoft.Network/networkSecurityGroups':
+                    # NSG is always running
+                    status = "Running"
+                elif resource.type == 'Microsoft.Network/applicationGateways':
+                    # Application Gateway status
+                    try:
+                        agw = azure_client.network_client.application_gateways.get(resource_group, resource.name)
+                        status = agw.provisioning_state
+                    except:
+                        status = "Running"
+                
+                resource_statuses.append({
+                    'name': resource.name,
+                    'type': resource.type,
+                    'status': status,
+                    'location': resource.location
+                })
+            except Exception as e:
+                print(f"Error getting status for {resource.name}: {e}")
+                resource_statuses.append({
+                    'name': resource.name,
+                    'type': resource.type,
+                    'status': 'Unknown',
+                    'location': resource.location
+                })
+        
+        return jsonify({
+            "success": True,
+            "resource_group": resource_group,
+            "resources": resource_statuses,
+            "total_resources": len(resource_statuses)
+        })
+        
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "message": f"Error getting resource status: {str(e)}"
+        }), 500
 
 @app.route('/api/deployment-resources/<deployment_name>')
 def get_deployment_resources(deployment_name):

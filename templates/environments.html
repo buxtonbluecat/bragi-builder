@@ -102,12 +102,23 @@ function displayEnvironments(resourceGroups) {
                         </p>
                     </div>
                     <div class="card-footer">
-                        <div class="btn-group w-100" role="group">
+                        <div class="btn-group w-100 mb-2" role="group">
                             <button class="btn btn-outline-primary btn-sm" onclick="viewEndpoints('${environment}', '${projectName}', '${env.name}')">
                                 <i class="bi bi-eye"></i> Endpoints
                             </button>
                             <button class="btn btn-outline-danger btn-sm" onclick="deleteEnvironment('${environment}', '${projectName}', '${env.name}')">
                                 <i class="bi bi-trash"></i> Delete
+                            </button>
+                        </div>
+                        <div class="btn-group w-100" role="group">
+                            <button class="btn btn-outline-success btn-sm" onclick="startResources('${env.name}')" id="start-btn-${env.name}">
+                                <i class="bi bi-play-circle"></i> Start
+                            </button>
+                            <button class="btn btn-outline-warning btn-sm" onclick="stopResources('${env.name}')" id="stop-btn-${env.name}">
+                                <i class="bi bi-stop-circle"></i> Stop
+                            </button>
+                            <button class="btn btn-outline-info btn-sm" onclick="viewResourceStatus('${env.name}')" id="status-btn-${env.name}">
+                                <i class="bi bi-info-circle"></i> Status
                             </button>
                         </div>
                     </div>
@@ -270,6 +281,182 @@ function showErrorNotification(message) {
     toast.addEventListener('hidden.bs.toast', () => {
         toast.remove();
     });
+}
+
+function startResources(resourceGroup) {
+    const startBtn = document.getElementById(`start-btn-${resourceGroup}`);
+    const stopBtn = document.getElementById(`stop-btn-${resourceGroup}`);
+    
+    // Disable buttons and show loading
+    startBtn.disabled = true;
+    startBtn.innerHTML = '<i class="bi bi-hourglass-split"></i> Starting...';
+    
+    fetch(`/api/resource-groups/${resourceGroup}/start`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        }
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            showSuccessNotification(data.message);
+            // Refresh resource status after a delay
+            setTimeout(() => {
+                viewResourceStatus(resourceGroup);
+            }, 2000);
+        } else {
+            showErrorNotification(data.message);
+        }
+    })
+    .catch(error => {
+        showErrorNotification('Error starting resources: ' + error.message);
+    })
+    .finally(() => {
+        // Re-enable buttons
+        startBtn.disabled = false;
+        startBtn.innerHTML = '<i class="bi bi-play-circle"></i> Start';
+    });
+}
+
+function stopResources(resourceGroup) {
+    const startBtn = document.getElementById(`start-btn-${resourceGroup}`);
+    const stopBtn = document.getElementById(`stop-btn-${resourceGroup}`);
+    
+    // Disable buttons and show loading
+    stopBtn.disabled = true;
+    stopBtn.innerHTML = '<i class="bi bi-hourglass-split"></i> Stopping...';
+    
+    fetch(`/api/resource-groups/${resourceGroup}/stop`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        }
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            showSuccessNotification(data.message);
+            // Refresh resource status after a delay
+            setTimeout(() => {
+                viewResourceStatus(resourceGroup);
+            }, 2000);
+        } else {
+            showErrorNotification(data.message);
+        }
+    })
+    .catch(error => {
+        showErrorNotification('Error stopping resources: ' + error.message);
+    })
+    .finally(() => {
+        // Re-enable buttons
+        stopBtn.disabled = false;
+        stopBtn.innerHTML = '<i class="bi bi-stop-circle"></i> Stop';
+    });
+}
+
+function viewResourceStatus(resourceGroup) {
+    const statusBtn = document.getElementById(`status-btn-${resourceGroup}`);
+    
+    // Show loading
+    statusBtn.disabled = true;
+    statusBtn.innerHTML = '<i class="bi bi-hourglass-split"></i> Loading...';
+    
+    fetch(`/api/resource-groups/${resourceGroup}/status`)
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            displayResourceStatusModal(resourceGroup, data.resources);
+        } else {
+            showErrorNotification(data.message);
+        }
+    })
+    .catch(error => {
+        showErrorNotification('Error loading resource status: ' + error.message);
+    })
+    .finally(() => {
+        // Re-enable button
+        statusBtn.disabled = false;
+        statusBtn.innerHTML = '<i class="bi bi-info-circle"></i> Status';
+    });
+}
+
+function displayResourceStatusModal(resourceGroup, resources) {
+    // Create modal HTML
+    const modalHtml = `
+        <div class="modal fade" id="resourceStatusModal" tabindex="-1">
+            <div class="modal-dialog modal-lg">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title">Resource Status - ${resourceGroup}</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                    </div>
+                    <div class="modal-body">
+                        <div class="table-responsive">
+                            <table class="table table-sm table-hover">
+                                <thead class="table-light">
+                                    <tr>
+                                        <th>Resource Name</th>
+                                        <th>Type</th>
+                                        <th>Status</th>
+                                        <th>Location</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    ${resources.map(resource => `
+                                        <tr>
+                                            <td>${resource.name}</td>
+                                            <td><span class="badge bg-secondary">${resource.type}</span></td>
+                                            <td><span class="badge ${getStatusBadgeClass(resource.status)}">${resource.status}</span></td>
+                                            <td>${resource.location}</td>
+                                        </tr>
+                                    `).join('')}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                        <button type="button" class="btn btn-primary" onclick="viewResourceStatus('${resourceGroup}')">
+                            <i class="bi bi-arrow-clockwise"></i> Refresh
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+    
+    // Remove existing modal if any
+    const existingModal = document.getElementById('resourceStatusModal');
+    if (existingModal) {
+        existingModal.remove();
+    }
+    
+    // Add modal to DOM
+    document.body.insertAdjacentHTML('beforeend', modalHtml);
+    
+    // Show modal
+    const modal = new bootstrap.Modal(document.getElementById('resourceStatusModal'));
+    modal.show();
+}
+
+function getStatusBadgeClass(status) {
+    switch(status.toLowerCase()) {
+        case 'running':
+        case 'started':
+            return 'bg-success';
+        case 'stopped':
+        case 'deallocated':
+        case 'stopping':
+            return 'bg-warning';
+        case 'starting':
+            return 'bg-info';
+        case 'failed':
+        case 'error':
+            return 'bg-danger';
+        default:
+            return 'bg-secondary';
+    }
 }
 </script>
 {% endblock %}

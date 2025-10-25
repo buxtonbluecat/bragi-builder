@@ -1,0 +1,50 @@
+/* Optimise Logo Styles */
+.logo-container {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.logo-text {
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    font-weight: bold;
+    font-size: 1.5rem;
+    color: #333;
+    letter-spacing: -0.5px;
+}
+
+.logo-pixel {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    background-color: #e91e63; /* Magenta color */
+    margin: 0 1px;
+}
+
+.logo-pixel-small {
+    width: 6px;
+    height: 6px;
+}
+
+/* Responsive logo sizing */
+@media (max-width: 768px) {
+    .logo-text {
+        font-size: 1.25rem;
+    }
+    
+    .logo-pixel {
+        width: 6px;
+        height: 6px;
+    }
+    
+    .logo-pixel-small {
+        width: 4px;
+        height: 4px;
+    }
+}
+
+/* Favicon styles */
+.favicon {
+    width: 32px;
+    height: 32px;
+}

@@ -7,7 +7,7 @@ import json
 import threading
 import time
 import datetime
-from flask import Flask, render_template, request, jsonify, redirect, url_for, flash
+from flask import Flask, render_template, request, jsonify, redirect, url_for, flash, session
 from flask_socketio import SocketIO, emit
 from dotenv import load_dotenv
 from src.azure_client import AzureClient
@@ -19,6 +19,8 @@ from src.template_wizard import TemplateWizard
 from src.vnet_validator import VNetValidator
 from src.deployment_store import DeploymentStore, DeploymentRecord
 from src.metrics_dashboard import metrics_bp
+from src.auth import auth
+from src.app_deployment import AppDeploymentManager
 
 # Load environment variables
 load_dotenv()
@@ -26,6 +28,9 @@ load_dotenv()
 app = Flask(__name__)
 app.secret_key = os.getenv('SECRET_KEY', 'dev-secret-key-change-in-production')
 socketio = SocketIO(app, cors_allowed_origins="*")
+
+# Initialize authentication (will be disabled if Azure AD not configured)
+auth.init_app(app)
 
 # Set Azure subscription ID for Azure CLI authentication
 os.environ['AZURE_SUBSCRIPTION_ID'] = '693bb5f4-bea9-4714-b990-55d5a4032ae1'
@@ -40,6 +45,14 @@ except Exception as e:
     azure_client = None
     template_manager = TemplateManager()
     deployment_manager = None
+
+# Initialize app deployment manager (after azure_client is initialized)
+app_deployment_manager = None
+if azure_client:
+    try:
+        app_deployment_manager = AppDeploymentManager(azure_client)
+    except Exception as e:
+        print(f"Warning: Failed to initialize app deployment manager: {e}")
 
 # Initialize offline review and workload config managers
 offline_review = OfflineReviewManager()
@@ -276,6 +289,65 @@ def get_detailed_status_message(status, elapsed_time, final=False):
     }
     
     return status_messages.get(status, f'Status: {status} ({time_str})')
+
+
+@app.route('/login')
+def login():
+    """Login route - redirects to Azure AD"""
+    if auth.is_authenticated():
+        return redirect(url_for('index'))
+    
+    login_url = auth.get_login_url()
+    if login_url:
+        return redirect(login_url)
+    else:
+        # If Azure AD not configured, allow access (for development)
+        flash("Azure AD authentication not configured. Running in development mode.", "info")
+        session['authenticated'] = True
+        session['user'] = {'displayName': 'Development User', 'mail': 'dev@localhost'}
+        return redirect(url_for('index'))
+
+
+@app.route('/login/authorized')
+def authorized():
+    """Callback route for Azure AD authentication"""
+    code = request.args.get('code')
+    error = request.args.get('error')
+    
+    if error:
+        flash(f"Authentication error: {error}", "error")
+        return redirect(url_for('login'))
+    
+    if not code:
+        flash("No authorization code received", "error")
+        return redirect(url_for('login'))
+    
+    # Exchange code for token
+    token_result = auth.get_token_from_code(code)
+    if not token_result or 'access_token' not in token_result:
+        flash("Failed to acquire access token", "error")
+        return redirect(url_for('login'))
+    
+    # Get user information
+    user_info = auth.get_user_info(token_result['access_token'])
+    if not user_info:
+        flash("Failed to get user information", "error")
+        return redirect(url_for('login'))
+    
+    # Store in session
+    auth.login(user_info, token_result['access_token'])
+    
+    # Redirect to original URL or index
+    next_url = session.pop('next_url', None) or url_for('index')
+    return redirect(next_url)
+
+
+@app.route('/logout')
+def logout():
+    """Logout route"""
+    auth.logout()
+    flash("You have been logged out successfully", "info")
+    return redirect(url_for('index'))
 
 
 @app.route('/')
@@ -630,6 +702,209 @@ def get_resource_groups():
 def environments_page():
     """Environment management page"""
     return render_template('environments.html')
+
+
+@app.route('/deploy-app')
+def deploy_app_page():
+    """Self-deployment page for deploying Bragi Builder to Azure"""
+    if not app_deployment_manager:
+        flash("Azure client not configured. Cannot deploy to Azure.", "error")
+        return redirect(url_for('index'))
+    
+    # Get available Azure regions
+    regions = []
+    if azure_client:
+        try:
+            regions = azure_client.get_available_regions()
+        except Exception as e:
+            print(f"Error getting regions: {e}")
+    
+    return render_template('deploy_app.html', regions=regions)
+
+
+@app.route('/api/deploy-app/validate', methods=['POST'])
+def validate_app_deployment():
+    """Validate deployment configuration"""
+    if not app_deployment_manager:
+        return jsonify({"success": False, "message": "App deployment manager not available"}), 400
+    
+    try:
+        data = request.get_json()
+        validation = app_deployment_manager.validate_deployment_config(data)
+        
+        # Also check App Service name availability
+        name_check = None
+        if data.get('app_service_name'):
+            name_check = app_deployment_manager.check_app_service_name_availability(data['app_service_name'])
+        
+        return jsonify({
+            "success": True,
+            "validation": validation,
+            "name_check": name_check
+        })
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 400
+
+
+@app.route('/api/deploy-app', methods=['POST'])
+def deploy_app():
+    """Deploy Bragi Builder to Azure App Service"""
+    if not app_deployment_manager:
+        return jsonify({"success": False, "message": "App deployment manager not available"}), 400
+    
+    try:
+        data = request.get_json()
+        
+        # Validate required fields
+        required_fields = ['resource_group', 'app_service_name', 'location']
+        for field in required_fields:
+            if not data.get(field):
+                return jsonify({"success": False, "message": f"{field} is required"}), 400
+        
+        # Start deployment in background thread
+        def deploy_in_background():
+            try:
+                result = app_deployment_manager.deploy_bragi_builder(data)
+                # Emit result via WebSocket
+                socketio.emit('app_deployment_complete', result)
+            except Exception as e:
+                socketio.emit('app_deployment_error', {
+                    "success": False,
+                    "error": str(e)
+                })
+        
+        # Start deployment thread
+        deployment_thread = threading.Thread(target=deploy_in_background)
+        deployment_thread.daemon = True
+        deployment_thread.start()
+        
+        return jsonify({
+            "success": True,
+            "message": "Deployment started. You will be notified when it completes.",
+            "status": "running"
+        })
+        
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 400
+
+
+@app.route('/api/deploy-app/status/<deployment_id>')
+def get_app_deployment_status(deployment_id):
+    """Get status of app deployment"""
+    if not app_deployment_manager:
+        return jsonify({"success": False, "message": "App deployment manager not available"}), 400
+    
+    try:
+        if deployment_id in app_deployment_manager.deployments:
+            deployment = app_deployment_manager.deployments[deployment_id]
+            return jsonify({
+                "success": True,
+                "deployment": deployment
+            })
+        else:
+            return jsonify({
+                "success": False,
+                "message": "Deployment not found"
+            }), 404
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 400
+
+
+@app.route('/api/deploy-app/verify/<resource_group>/<app_service_name>')
+def verify_app_service_deployment(resource_group, app_service_name):
+    """Verify what resources were actually created in Azure"""
+    if not app_deployment_manager:
+        return jsonify({"success": False, "message": "App deployment manager not available"}), 400
+    
+    try:
+        verification_results = {
+            'resource_group': None,
+            'app_service_plan': None,
+            'app_service': None,
+            'resources': []
+        }
+        
+        # Check resource group
+        try:
+            rg = azure_client.get_resource_group(resource_group)
+            if rg:
+                verification_results['resource_group'] = {
+                    'exists': True,
+                    'name': rg.name,
+                    'location': rg.location,
+                    'tags': rg.tags if rg.tags else {}
+                }
+            else:
+                verification_results['resource_group'] = {'exists': False}
+        except Exception as e:
+            verification_results['resource_group'] = {'exists': False, 'error': str(e)}
+        
+        # List all resources in the resource group
+        try:
+            resources = azure_client.list_resources_in_group(resource_group)
+            verification_results['resources'] = [
+                {
+                    'name': r.name,
+                    'type': r.type,
+                    'location': r.location
+                }
+                for r in resources
+            ]
+            
+            # Check for App Service Plan
+            for r in resources:
+                if 'Microsoft.Web/serverfarms' in r.type:
+                    try:
+                        plan = app_deployment_manager.web_client.app_service_plans.get(resource_group, r.name)
+                        verification_results['app_service_plan'] = {
+                            'exists': True,
+                            'name': plan.name,
+                            'sku': plan.sku.name if plan.sku else 'Unknown',
+                            'tier': plan.sku.tier if plan.sku else 'Unknown',
+                            'status': plan.status if hasattr(plan, 'status') else 'Unknown'
+                        }
+                    except Exception as e:
+                        verification_results['app_service_plan'] = {'exists': True, 'error': str(e)}
+            
+            # Check for App Service
+            for r in resources:
+                if 'Microsoft.Web/sites' in r.type and '/slots' not in r.type:
+                    try:
+                        app = app_deployment_manager.web_client.web_apps.get(resource_group, r.name)
+                        verification_results['app_service'] = {
+                            'exists': True,
+                            'name': app.name,
+                            'state': app.state,
+                            'default_host_name': app.default_host_name,
+                            'enabled': app.enabled if hasattr(app, 'enabled') else None,
+                            'https_only': app.https_only if hasattr(app, 'https_only') else None
+                        }
+                    except Exception as e:
+                        verification_results['app_service'] = {'exists': True, 'error': str(e)}
+            
+            # If App Service not found in resources, try direct lookup
+            if not verification_results['app_service']:
+                try:
+                    app = app_deployment_manager.web_client.web_apps.get(resource_group, app_service_name)
+                    verification_results['app_service'] = {
+                        'exists': True,
+                        'name': app.name,
+                        'state': app.state,
+                        'default_host_name': app.default_host_name
+                    }
+                except Exception as e:
+                    verification_results['app_service'] = {'exists': False, 'error': str(e)}
+                    
+        except Exception as e:
+            verification_results['error'] = f"Failed to list resources: {str(e)}"
+        
+        return jsonify({
+            "success": True,
+            "verification": verification_results
+        })
+        
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 400
 
 
 @app.route('/api/regions')
@@ -1377,4 +1652,10 @@ def handle_get_deployment_status(data):
 
 
 if __name__ == '__main__':
-    socketio.run(app, debug=True, host='0.0.0.0', port=8080, allow_unsafe_werkzeug=True)
+    # Get port from environment variable (Azure App Service uses PORT, default to 8080 for local)
+    port = int(os.getenv('PORT', os.getenv('WEBSITES_PORT', 8080)))
+    debug = os.getenv('FLASK_ENV', 'development') == 'development'
+    
+    # In production (App Service), gunicorn will handle the server
+    # This is only for local development
+    socketio.run(app, debug=debug, host='0.0.0.0', port=port, allow_unsafe_werkzeug=True)

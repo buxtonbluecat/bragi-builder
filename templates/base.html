@@ -90,6 +90,11 @@
                                 <i class="fas fa-server"></i> Environments
                             </a>
                         </li>
+                        <li class="nav-item">
+                            <a class="nav-link {% if request.endpoint == 'deploy_app_page' %}active{% endif %}" href="{{ url_for('deploy_app_page') }}">
+                                <i class="fas fa-cloud-upload-alt"></i> Deploy App
+                            </a>
+                        </li>
                     </ul>
                     
                     <hr>
@@ -103,6 +108,28 @@
                                 <i class="fas fa-plus"></i> New Environment
                             </button>
                         </div>
+                    </div>
+                    
+                    <hr>
+                    
+                    <!-- User Authentication Section -->
+                    <div class="px-3 mt-auto">
+                        {% if session.get('authenticated') and session.get('user') %}
+                            <div class="mb-2">
+                                <small class="text-muted d-block">Logged in as:</small>
+                                <strong>{{ session.user.get('displayName', session.user.get('mail', 'User')) }}</strong>
+                                {% if session.user.get('mail') %}
+                                    <br><small class="text-muted">{{ session.user.mail }}</small>
+                                {% endif %}
+                            </div>
+                            <a href="{{ url_for('logout') }}" class="btn btn-outline-danger btn-sm w-100">
+                                <i class="fas fa-sign-out-alt"></i> Logout
+                            </a>
+                        {% else %}
+                            <a href="{{ url_for('login') }}" class="btn btn-outline-primary btn-sm w-100">
+                                <i class="fas fa-sign-in-alt"></i> Login with Azure AD
+                            </a>
+                        {% endif %}
                     </div>
                 </div>
             </nav>

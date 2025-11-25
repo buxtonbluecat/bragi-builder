@@ -1,0 +1,480 @@
+{% extends "base.html" %}
+
+{% block title %}Deploy Bragi Builder to Azure - Bragi Builder{% endblock %}
+
+{% block extra_head %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.js"></script>
+{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <div class="row">
+        <div class="col-12">
+            <h2><i class="fas fa-rocket"></i> Deploy Bragi Builder to Azure</h2>
+            <p class="text-muted">Deploy this application to Azure App Service</p>
+        </div>
+    </div>
+
+    <div class="row mt-4">
+        <div class="col-lg-8">
+            <div class="card">
+                <div class="card-header bg-primary text-white">
+                    <h5 class="mb-0"><i class="fas fa-cog"></i> Deployment Configuration</h5>
+                </div>
+                <div class="card-body">
+                    <form id="deployAppForm">
+                        <!-- Resource Group -->
+                        <div class="mb-3">
+                            <label for="resource_group" class="form-label">Resource Group <span class="text-danger">*</span></label>
+                            <input type="text" class="form-control" id="resource_group" name="resource_group" 
+                                   placeholder="bragi-builder-rg" required>
+                            <small class="form-text text-muted">Name for the Azure resource group (will be created if it doesn't exist)</small>
+                            <div class="invalid-feedback" id="resource_group_error"></div>
+                        </div>
+
+                        <!-- App Service Name -->
+                        <div class="mb-3">
+                            <label for="app_service_name" class="form-label">App Service Name <span class="text-danger">*</span></label>
+                            <input type="text" class="form-control" id="app_service_name" name="app_service_name" 
+                                   placeholder="bragi-builder" required pattern="[a-zA-Z0-9-]{3,60}">
+                            <small class="form-text text-muted">Globally unique name for your App Service (3-60 characters, alphanumeric and hyphens only)</small>
+                            <div class="invalid-feedback" id="app_service_name_error"></div>
+                            <div id="name_check_result" class="mt-2"></div>
+                        </div>
+
+                        <!-- Location -->
+                        <div class="mb-3">
+                            <label for="location" class="form-label">Azure Region <span class="text-danger">*</span></label>
+                            <select class="form-select" id="location" name="location" required>
+                                <option value="">Select a region...</option>
+                                {% if regions %}
+                                    {% for region in regions %}
+                                        <option value="{{ region.name }}" {% if region.name == 'eastus' %}selected{% endif %}>
+                                            {{ region.display_name }} ({{ region.name }})
+                                        </option>
+                                    {% endfor %}
+                                {% else %}
+                                    <option value="eastus" selected>East US</option>
+                                    <option value="westus2">West US 2</option>
+                                    <option value="westeurope">West Europe</option>
+                                    <option value="southeastasia">Southeast Asia</option>
+                                {% endif %}
+                            </select>
+                            <small class="form-text text-muted">Azure region where resources will be created</small>
+                        </div>
+
+                        <!-- App Service Plan Name -->
+                        <div class="mb-3">
+                            <label for="app_service_plan" class="form-label">App Service Plan Name</label>
+                            <input type="text" class="form-control" id="app_service_plan" name="app_service_plan" 
+                                   placeholder="Auto-generated from App Service name">
+                            <small class="form-text text-muted">Leave empty to auto-generate (App Service name + '-plan')</small>
+                        </div>
+
+                        <!-- SKU -->
+                        <div class="mb-3">
+                            <label for="sku" class="form-label">App Service Plan SKU</label>
+                            <select class="form-select" id="sku" name="sku">
+                                <option value="F1">Free (F1) - Development only</option>
+                                <option value="B1" selected>Basic (B1) - $13/month</option>
+                                <option value="B2">Basic (B2) - $26/month</option>
+                                <option value="B3">Basic (B3) - $52/month</option>
+                                <option value="S1">Standard (S1) - $73/month</option>
+                                <option value="S2">Standard (S2) - $146/month</option>
+                                <option value="S3">Standard (S3) - $292/month</option>
+                                <option value="P1">Premium (P1) - $146/month</option>
+                                <option value="P2">Premium (P2) - $292/month</option>
+                                <option value="P3">Premium (P3) - $584/month</option>
+                            </select>
+                            <small class="form-text text-muted">Pricing tier for your App Service Plan</small>
+                        </div>
+
+                        <!-- Advanced Settings (Collapsible) -->
+                        <div class="mb-3">
+                            <button class="btn btn-link p-0" type="button" data-bs-toggle="collapse" data-bs-target="#advancedSettings">
+                                <i class="fas fa-chevron-down"></i> Advanced Settings
+                            </button>
+                            <div class="collapse mt-2" id="advancedSettings">
+                                <div class="card card-body bg-light">
+                                    <h6>Application Settings (Optional)</h6>
+                                    <small class="text-muted mb-3 d-block">These will be set as environment variables in App Service</small>
+                                    
+                                    <div class="mb-2">
+                                        <label for="custom_settings" class="form-label small">Custom Settings (JSON)</label>
+                                        <textarea class="form-control form-control-sm" id="custom_settings" name="custom_settings" 
+                                                  rows="4" placeholder='{"KEY": "value"}'></textarea>
+                                        <small class="form-text text-muted">Additional environment variables as JSON object</small>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Submit Button -->
+                        <div class="d-grid gap-2">
+                            <button type="submit" class="btn btn-primary btn-lg" id="deployBtn">
+                                <i class="fas fa-rocket"></i> Deploy to Azure
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+
+        <!-- Info Panel -->
+        <div class="col-lg-4">
+            <div class="card">
+                <div class="card-header bg-info text-white">
+                    <h6 class="mb-0"><i class="fas fa-info-circle"></i> What Will Be Created</h6>
+                </div>
+                <div class="card-body">
+                    <ul class="list-unstyled mb-0">
+                        <li class="mb-2"><i class="fas fa-check text-success"></i> Resource Group</li>
+                        <li class="mb-2"><i class="fas fa-check text-success"></i> App Service Plan (Linux)</li>
+                        <li class="mb-2"><i class="fas fa-check text-success"></i> App Service (Python 3.11)</li>
+                        <li class="mb-2"><i class="fas fa-check text-success"></i> Managed Identity</li>
+                        <li class="mb-2"><i class="fas fa-check text-success"></i> WebSocket Support</li>
+                        <li class="mb-2"><i class="fas fa-check text-success"></i> Application Code Deployment</li>
+                    </ul>
+                    <hr>
+                    <div class="alert alert-warning small mb-0">
+                        <strong>Note:</strong> After deployment, you'll need to:
+                        <ol class="mb-0 mt-2">
+                            <li>Configure Azure AD authentication</li>
+                            <li>Set environment variables</li>
+                            <li>Grant Managed Identity permissions</li>
+                        </ol>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Deployment Progress -->
+            <div class="card mt-3" id="deploymentProgress" style="display: none;">
+                <div class="card-header bg-success text-white">
+                    <h6 class="mb-0"><i class="fas fa-spinner fa-spin"></i> Deployment Progress</h6>
+                </div>
+                <div class="card-body">
+                    <div id="deploymentSteps"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.js"></script>
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const form = document.getElementById('deployAppForm');
+    const deployBtn = document.getElementById('deployBtn');
+    const appServiceNameInput = document.getElementById('app_service_name');
+    const nameCheckResult = document.getElementById('name_check_result');
+    
+    // Auto-generate App Service Plan name
+    appServiceNameInput.addEventListener('input', function() {
+        const appServicePlanInput = document.getElementById('app_service_plan');
+        if (!appServicePlanInput.value && this.value) {
+            appServicePlanInput.value = this.value + '-plan';
+        }
+    });
+    
+    // Check App Service name availability on blur
+    let nameCheckTimeout;
+    appServiceNameInput.addEventListener('blur', function() {
+        const name = this.value.trim();
+        if (name.length >= 3 && name.length <= 60) {
+            clearTimeout(nameCheckTimeout);
+            nameCheckTimeout = setTimeout(() => {
+                checkNameAvailability(name);
+            }, 500);
+        }
+    });
+    
+    function checkNameAvailability(name) {
+        nameCheckResult.innerHTML = '<small class="text-muted"><i class="fas fa-spinner fa-spin"></i> Checking availability...</small>';
+        
+        fetch('/api/deploy-app/validate', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({app_service_name: name})
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success && data.name_check) {
+                if (data.name_check.available) {
+                    nameCheckResult.innerHTML = `<small class="text-success"><i class="fas fa-check-circle"></i> ${data.name_check.message}</small>`;
+                } else {
+                    nameCheckResult.innerHTML = `<small class="text-danger"><i class="fas fa-times-circle"></i> ${data.name_check.message}</small>`;
+                }
+            }
+        })
+        .catch(error => {
+            nameCheckResult.innerHTML = '<small class="text-warning">Could not check availability</small>';
+        });
+    }
+    
+    // Handle form submission
+    form.addEventListener('submit', function(e) {
+        e.preventDefault();
+        
+        // Disable button
+        deployBtn.disabled = true;
+        deployBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Deploying...';
+        
+        // Collect form data
+        const formData = {
+            resource_group: document.getElementById('resource_group').value,
+            app_service_name: document.getElementById('app_service_name').value,
+            location: document.getElementById('location').value,
+            app_service_plan: document.getElementById('app_service_plan').value || null,
+            sku: document.getElementById('sku').value
+        };
+        
+        // Parse custom settings if provided
+        const customSettings = document.getElementById('custom_settings').value;
+        if (customSettings.trim()) {
+            try {
+                formData.app_settings = JSON.parse(customSettings);
+            } catch (e) {
+                alert('Invalid JSON in custom settings: ' + e.message);
+                deployBtn.disabled = false;
+                deployBtn.innerHTML = '<i class="fas fa-rocket"></i> Deploy to Azure';
+                return;
+            }
+        }
+        
+        // Show progress panel
+        document.getElementById('deploymentProgress').style.display = 'block';
+        document.getElementById('deploymentSteps').innerHTML = '<div class="spinner-border spinner-border-sm"></div> Starting deployment...';
+        
+        // Start deployment
+        fetch('/api/deploy-app', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(formData)
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                // Connect to SocketIO for real-time updates
+                const socket = io();
+                
+                // Listen for deployment updates via WebSocket
+                socket.on('app_deployment_complete', function(result) {
+                    handleDeploymentComplete(result);
+                });
+                
+                socket.on('app_deployment_error', function(error) {
+                    handleDeploymentError(error);
+                });
+                
+                // Update progress message
+                document.getElementById('deploymentSteps').innerHTML = 
+                    '<div class="alert alert-info"><i class="fas fa-spinner fa-spin"></i> Deployment in progress... Listening for updates.</div>';
+            } else {
+                alert('Error: ' + data.message);
+                deployBtn.disabled = false;
+                deployBtn.innerHTML = '<i class="fas fa-rocket"></i> Deploy to Azure';
+            }
+        })
+        .catch(error => {
+            alert('Error starting deployment: ' + error.message);
+            deployBtn.disabled = false;
+            deployBtn.innerHTML = '<i class="fas fa-rocket"></i> Deploy to Azure';
+        });
+    });
+    
+    function handleDeploymentComplete(result) {
+        let html = '<div class="alert alert-success">';
+        html += '<h5><i class="fas fa-check-circle"></i> Deployment Complete!</h5>';
+        
+        // Show App URL prominently
+        if (result.app_url) {
+            html += '<div class="alert alert-info mb-3">';
+            html += '<h6><i class="fas fa-globe"></i> Your Application is Live!</h6>';
+            html += '<p class="mb-2"><strong>Application URL:</strong></p>';
+            html += `<div class="input-group mb-2">
+                <input type="text" class="form-control" id="appUrl" value="${result.app_url}" readonly>
+                <button class="btn btn-outline-secondary" type="button" onclick="copyAppUrl()">
+                    <i class="fas fa-copy"></i> Copy
+                </button>
+            </div>`;
+            html += `<a href="${result.app_url}" target="_blank" class="btn btn-primary me-2">
+                <i class="fas fa-external-link-alt"></i> Open Application
+            </a>`;
+            
+            // Add verify button
+            if (result.resource_group && result.app_service_name) {
+                html += `<button class="btn btn-outline-info" type="button" onclick="verifyDeployment('${result.resource_group}', '${result.app_service_name}')">
+                    <i class="fas fa-search"></i> Verify Deployment
+                </button>`;
+            }
+            
+            html += '</div>';
+        }
+        
+        // Show deployment steps
+        if (result.steps) {
+            html += '<h6>Deployment Steps:</h6><ul class="mb-3">';
+            result.steps.forEach(step => {
+                const icon = step.status === 'completed' ? 'check-circle text-success' : 
+                           step.status === 'warning' ? 'exclamation-triangle text-warning' : 
+                           'times-circle text-danger';
+                html += `<li><i class="fas fa-${icon}"></i> ${step.message}</li>`;
+            });
+            html += '</ul>';
+        }
+        
+        // Show next steps
+        if (result.next_steps) {
+            html += '<hr><h6><i class="fas fa-list-check"></i> Next Steps:</h6>';
+            html += '<ol class="mb-0">';
+            result.next_steps.forEach(step => {
+                html += `<li>${step}</li>`;
+            });
+            html += '</ol>';
+        }
+        
+        html += '</div>';
+        document.getElementById('deploymentSteps').innerHTML = html;
+        deployBtn.disabled = false;
+        deployBtn.innerHTML = '<i class="fas fa-check"></i> Deployment Complete';
+    }
+    
+    function copyAppUrl() {
+        const urlInput = document.getElementById('appUrl');
+        urlInput.select();
+        urlInput.setSelectionRange(0, 99999); // For mobile devices
+        document.execCommand('copy');
+        
+        // Show feedback
+        const btn = event.target.closest('button');
+        const originalHtml = btn.innerHTML;
+        btn.innerHTML = '<i class="fas fa-check"></i> Copied!';
+        btn.classList.add('btn-success');
+        btn.classList.remove('btn-outline-secondary');
+        
+        setTimeout(() => {
+            btn.innerHTML = originalHtml;
+            btn.classList.remove('btn-success');
+            btn.classList.add('btn-outline-secondary');
+        }, 2000);
+    }
+    
+    function handleDeploymentError(error) {
+        let html = '<div class="alert alert-danger"><h6><i class="fas fa-times-circle"></i> Deployment Failed</h6>';
+        html += '<p>' + (error.error || error.message || 'Unknown error') + '</p>';
+        
+        if (error.steps) {
+            html += '<ul class="mb-0">';
+            error.steps.forEach(step => {
+                html += `<li><i class="fas fa-info-circle"></i> ${step.message}</li>`;
+            });
+            html += '</ul>';
+        }
+        
+        html += '</div>';
+        document.getElementById('deploymentSteps').innerHTML = html;
+        deployBtn.disabled = false;
+        deployBtn.innerHTML = '<i class="fas fa-rocket"></i> Deploy to Azure';
+    }
+    
+    function pollDeploymentStatus() {
+        // This would be used if WebSocket is not available
+        // For now, we'll rely on WebSocket
+        console.log('Polling not implemented, using WebSocket');
+    }
+    
+    function verifyDeployment(resourceGroup, appServiceName) {
+        const verifyBtn = event.target;
+        const originalHtml = verifyBtn.innerHTML;
+        verifyBtn.disabled = true;
+        verifyBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Verifying...';
+        
+        fetch(`/api/deploy-app/verify/${resourceGroup}/${appServiceName}`)
+            .then(response => response.json())
+            .then(data => {
+                verifyBtn.disabled = false;
+                verifyBtn.innerHTML = originalHtml;
+                
+                if (data.success) {
+                    displayVerificationResults(data.verification, resourceGroup, appServiceName);
+                } else {
+                    alert('Verification failed: ' + data.message);
+                }
+            })
+            .catch(error => {
+                verifyBtn.disabled = false;
+                verifyBtn.innerHTML = originalHtml;
+                alert('Error verifying deployment: ' + error.message);
+            });
+    }
+    
+    function displayVerificationResults(verification, resourceGroup, appServiceName) {
+        let html = '<div class="card mt-3">';
+        html += '<div class="card-header bg-info text-white"><h6 class="mb-0"><i class="fas fa-search"></i> Deployment Verification</h6></div>';
+        html += '<div class="card-body">';
+        
+        // Resource Group
+        if (verification.resource_group) {
+            const rg = verification.resource_group;
+            html += `<p><strong>Resource Group:</strong> `;
+            if (rg.exists) {
+                html += `<span class="badge bg-success">Exists</span> ${rg.name} (${rg.location})`;
+            } else {
+                html += `<span class="badge bg-danger">Not Found</span>`;
+            }
+            html += '</p>';
+        }
+        
+        // App Service Plan
+        if (verification.app_service_plan) {
+            const plan = verification.app_service_plan;
+            html += `<p><strong>App Service Plan:</strong> `;
+            if (plan.exists) {
+                html += `<span class="badge bg-success">Exists</span> ${plan.name} (${plan.sku || 'Unknown'})`;
+            } else {
+                html += `<span class="badge bg-danger">Not Found</span>`;
+            }
+            html += '</p>';
+        }
+        
+        // App Service
+        if (verification.app_service) {
+            const app = verification.app_service;
+            html += `<p><strong>App Service:</strong> `;
+            if (app.exists) {
+                html += `<span class="badge bg-success">Exists</span> ${app.name}<br>`;
+                html += `<small>State: ${app.state || 'Unknown'}, Hostname: ${app.default_host_name || 'N/A'}</small>`;
+            } else {
+                html += `<span class="badge bg-danger">Not Found</span>`;
+                if (app.error) {
+                    html += `<br><small class="text-danger">Error: ${app.error}</small>`;
+                }
+            }
+            html += '</p>';
+        } else {
+            html += `<p><strong>App Service:</strong> <span class="badge bg-danger">Not Found</span></p>`;
+        }
+        
+        // All Resources
+        if (verification.resources && verification.resources.length > 0) {
+            html += '<hr><h6>Resources in Resource Group:</h6><ul class="mb-0">';
+            verification.resources.forEach(resource => {
+                html += `<li><code>${resource.name}</code> (${resource.type})</li>`;
+            });
+            html += '</ul>';
+        }
+        
+        html += '</div></div>';
+        
+        // Insert after deployment progress
+        const progressDiv = document.getElementById('deploymentProgress');
+        if (progressDiv) {
+            progressDiv.insertAdjacentHTML('afterend', html);
+        } else {
+            document.querySelector('.col-lg-4').insertAdjacentHTML('beforeend', html);
+        }
+    }
+});
+</script>
+{% endblock %}
+

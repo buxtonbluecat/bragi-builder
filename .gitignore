@@ -167,3 +167,6 @@ service-principal.json
 # Deployment artifacts
 deployments/
 *.deployment
+
+# Azure deployment files (keep scripts, ignore generated configs)
+.azure/

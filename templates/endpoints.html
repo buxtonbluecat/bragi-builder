@@ -23,39 +23,43 @@
     </div>
 
     <div class="row">
-        <!-- App Service -->
-        {% if endpoints.app_service %}
+        <!-- App Services -->
+        {% if endpoints.app_services %}
         <div class="col-md-6 mb-4">
             <div class="card">
                 <div class="card-header bg-primary text-white">
                     <h5 class="mb-0">
-                        <i class="fas fa-globe"></i> App Service
+                        <i class="fas fa-globe"></i> App Services ({{ endpoints.app_services|length }})
                     </h5>
                 </div>
                 <div class="card-body">
-                    <h6>{{ endpoints.app_service.name }}</h6>
-                    <p class="mb-2">
-                        <strong>URL:</strong> 
-                        <a href="{{ endpoints.app_service.url }}" target="_blank" class="text-decoration-none">
-                            {{ endpoints.app_service.url }}
-                            <i class="fas fa-external-link-alt"></i>
-                        </a>
-                    </p>
-                    <p class="mb-2">
-                        <strong>Hostname:</strong> {{ endpoints.app_service.hostname }}
-                    </p>
-                    <p class="mb-2">
-                        <strong>State:</strong> 
-                        <span class="badge bg-{{ 'success' if endpoints.app_service.state == 'Running' else 'warning' }}">
-                            {{ endpoints.app_service.state }}
-                        </span>
-                    </p>
-                    <p class="mb-0">
-                        <strong>HTTPS Only:</strong> 
-                        <span class="badge bg-{{ 'success' if endpoints.app_service.https_only else 'warning' }}">
-                            {{ 'Yes' if endpoints.app_service.https_only else 'No' }}
-                        </span>
-                    </p>
+                    {% for app_service in endpoints.app_services %}
+                    <div class="{% if not loop.last %}mb-4 pb-4 border-bottom{% endif %}">
+                        <h6>{{ app_service.name }}</h6>
+                        <p class="mb-2">
+                            <strong>URL:</strong> 
+                            <a href="{{ app_service.url }}" target="_blank" class="text-decoration-none">
+                                {{ app_service.url }}
+                                <i class="fas fa-external-link-alt"></i>
+                            </a>
+                        </p>
+                        <p class="mb-2">
+                            <strong>Hostname:</strong> {{ app_service.hostname }}
+                        </p>
+                        <p class="mb-2">
+                            <strong>State:</strong> 
+                            <span class="badge bg-{{ 'success' if app_service.state == 'Running' else 'warning' }}">
+                                {{ app_service.state }}
+                            </span>
+                        </p>
+                        <p class="mb-0">
+                            <strong>HTTPS Only:</strong> 
+                            <span class="badge bg-{{ 'success' if app_service.https_only else 'warning' }}">
+                                {{ 'Yes' if app_service.https_only else 'No' }}
+                            </span>
+                        </p>
+                    </div>
+                    {% endfor %}
                 </div>
             </div>
         </div>
@@ -110,12 +114,45 @@
                     <p class="mb-2">
                         <strong>Version:</strong> {{ endpoints.sql_server.version }}
                     </p>
-                    <p class="mb-0">
+                    <p class="mb-3">
                         <strong>State:</strong> 
                         <span class="badge bg-{{ 'success' if endpoints.sql_server.state == 'Ready' else 'warning' }}">
                             {{ endpoints.sql_server.state }}
                         </span>
                     </p>
+                    
+                    <!-- SQL Databases -->
+                    {% if endpoints.sql_databases %}
+                    <hr>
+                    <h6 class="mb-3">
+                        <i class="fas fa-database"></i> Databases ({{ endpoints.sql_databases|length }})
+                    </h6>
+                    {% for db in endpoints.sql_databases %}
+                    <div class="{% if not loop.last %}mb-3 pb-3 border-bottom{% endif %}">
+                        <p class="mb-1">
+                            <strong>{{ db.name }}</strong>
+                            <span class="badge bg-{{ 'success' if db.status == 'Online' else 'warning' }} ms-2">
+                                {{ db.status }}
+                            </span>
+                        </p>
+                        {% if db.edition %}
+                        <p class="mb-1 small text-muted">
+                            <strong>Edition:</strong> {{ db.edition }}
+                        </p>
+                        {% endif %}
+                        {% if db.service_objective %}
+                        <p class="mb-0 small text-muted">
+                            <strong>Service Objective:</strong> {{ db.service_objective }}
+                        </p>
+                        {% endif %}
+                    </div>
+                    {% endfor %}
+                    {% else %}
+                    <hr>
+                    <p class="mb-0 text-muted small">
+                        <i class="fas fa-info-circle"></i> No user databases found
+                    </p>
+                    {% endif %}
                 </div>
             </div>
         </div>
@@ -177,8 +214,45 @@
         {% endif %}
     </div>
 
+    <!-- All Resources Section -->
+    {% if endpoints.all_resources %}
+    <div class="row mt-4">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header bg-dark text-white">
+                    <h5 class="mb-0">
+                        <i class="fas fa-list"></i> All Resources in Resource Group ({{ endpoints.all_resources|length }})
+                    </h5>
+                </div>
+                <div class="card-body">
+                    <div class="table-responsive">
+                        <table class="table table-sm table-hover">
+                            <thead>
+                                <tr>
+                                    <th>Resource Name</th>
+                                    <th>Resource Type</th>
+                                    <th>Location</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for resource in endpoints.all_resources %}
+                                <tr>
+                                    <td><code>{{ resource.name }}</code></td>
+                                    <td><small class="text-muted">{{ resource.type }}</small></td>
+                                    <td><small>{{ resource.location }}</small></td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
     <!-- No endpoints found -->
-    {% if not endpoints.app_service and not endpoints.storage_account and not endpoints.sql_server and not endpoints.vnet and not endpoints.public_ips %}
+    {% if not endpoints.app_services and not endpoints.storage_account and not endpoints.sql_server and not endpoints.vnet and not endpoints.public_ips %}
     <div class="row">
         <div class="col-12">
             <div class="alert alert-warning text-center">

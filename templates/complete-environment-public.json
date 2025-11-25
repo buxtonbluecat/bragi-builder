@@ -110,6 +110,20 @@
       "metadata": {
         "description": "Comma-separated list of allowed client IP ranges for SQL Server (e.g., '1.2.3.4,5.6.7.8-5.6.7.10')"
       }
+    },
+    "enableUatDatabase": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Enable bragi_uat database"
+      }
+    },
+    "enableProdDatabase": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Enable bragi_prod database"
+      }
     }
   },
   "variables": {
@@ -125,10 +139,15 @@
     "gatewaySubnetPrefix": "10.0.5.0/24",
     "appServicePlanName": "[concat(variables('cleanResourceGroupName'), 'asp')]",
     "appServiceName": "[concat(take(variables('cleanResourceGroupName'), 20), 'app')]",
+    "schedappServiceName": "[concat(take(variables('cleanResourceGroupName'), 20), 'schedapp')]",
     "storageAccountName": "[concat(take(variables('cleanResourceGroupName'), 15), variables('uniqueSuffix'), 'stg')]",
     "sqlServerName": "[concat(take(variables('cleanResourceGroupName'), 20), 'sql')]",
-    "sqlDatabaseName": "[concat(take(variables('cleanResourceGroupName'), 20), 'db')]",
-    "sqlDWHName": "[concat(take(variables('cleanResourceGroupName'), 20), 'dwh')]",
+    "metaDatabaseName": "bragi_meta",
+    "dwhDatabaseName": "bragi_dw",
+    "devDatabaseName": "bragi_dev",
+    "testDatabaseName": "bragi_test",
+    "uatDatabaseName": "bragi_uat",
+    "prodDatabaseName": "bragi_prod",
     "publicIPName": "[concat(variables('cleanResourceGroupName'), 'pip')]",
     "applicationGatewayName": "[concat(variables('cleanResourceGroupName'), 'agw')]",
     "nsgName": "[concat(variables('cleanResourceGroupName'), 'nsg')]",
@@ -436,12 +455,61 @@
       }
     },
     {
+      "type": "Microsoft.Web/sites",
+      "apiVersion": "2021-02-01",
+      "name": "[variables('schedappServiceName')]",
+      "location": "[parameters('location')]",
+      "kind": "app,linux",
+      "dependsOn": [
+        "[resourceId('Microsoft.Web/serverfarms', variables('appServicePlanName'))]",
+        "[resourceId('Microsoft.Network/virtualNetworks', variables('vnetName'))]"
+      ],
+      "properties": {
+        "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', variables('appServicePlanName'))]",
+        "siteConfig": {
+          "linuxFxVersion": "DOTNETCORE|6.0",
+          "appSettings": [
+            {
+              "name": "WEBSITES_ENABLE_APP_SERVICE_STORAGE",
+              "value": "false"
+            },
+            {
+              "name": "WEBSITES_PORT",
+              "value": "80"
+            }
+          ],
+          "alwaysOn": "[if(contains(parameters('appServiceSku'), 'F'), 'false', 'true')]",
+          "httpLoggingEnabled": true,
+          "logsDirectorySizeLimit": 35,
+          "detailedErrorLoggingEnabled": true,
+          "publishingUsername": "$[variables('schedappServiceName')]",
+          "scmType": "None"
+        },
+        "httpsOnly": true,
+        "redundancyMode": "None"
+      }
+    },
+    {
       "type": "Microsoft.Web/sites/virtualNetworkConnections",
       "apiVersion": "2021-02-01",
       "name": "[concat(variables('appServiceName'), '/', variables('vnetName'))]",
       "location": "[parameters('location')]",
       "dependsOn": [
         "[resourceId('Microsoft.Web/sites', variables('appServiceName'))]",
+        "[resourceId('Microsoft.Network/virtualNetworks', variables('vnetName'))]"
+      ],
+      "properties": {
+        "vnetResourceId": "[resourceId('Microsoft.Network/virtualNetworks', variables('vnetName'))]",
+        "isSwift": true
+      }
+    },
+    {
+      "type": "Microsoft.Web/sites/virtualNetworkConnections",
+      "apiVersion": "2021-02-01",
+      "name": "[concat(variables('schedappServiceName'), '/', variables('vnetName'))]",
+      "location": "[parameters('location')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Web/sites', variables('schedappServiceName'))]",
         "[resourceId('Microsoft.Network/virtualNetworks', variables('vnetName'))]"
       ],
       "properties": {
@@ -521,7 +589,7 @@
     {
       "type": "Microsoft.Sql/servers/databases",
       "apiVersion": "2021-11-01",
-      "name": "[concat(variables('sqlServerName'), '/', variables('sqlDatabaseName'))]",
+      "name": "[concat(variables('sqlServerName'), '/', variables('metaDatabaseName'))]",
       "location": "[parameters('location')]",
       "dependsOn": [
         "[resourceId('Microsoft.Sql/servers', variables('sqlServerName'))]"
@@ -532,7 +600,7 @@
       },
       "properties": {
         "collation": "SQL_Latin1_General_CP1_CI_AS",
-        "maxSizeBytes": 1073741824,
+        "maxSizeBytes": 2147483648,
         "catalogCollation": "SQL_Latin1_General_CP1_CI_AS",
         "zoneRedundant": false,
         "readScale": "Disabled",
@@ -542,7 +610,7 @@
     {
       "type": "Microsoft.Sql/servers/databases",
       "apiVersion": "2021-11-01",
-      "name": "[concat(variables('sqlServerName'), '/', variables('sqlDWHName'))]",
+      "name": "[concat(variables('sqlServerName'), '/', variables('dwhDatabaseName'))]",
       "location": "[parameters('location')]",
       "dependsOn": [
         "[resourceId('Microsoft.Sql/servers', variables('sqlServerName'))]"
@@ -553,7 +621,93 @@
       },
       "properties": {
         "collation": "SQL_Latin1_General_CP1_CI_AS",
-        "maxSizeBytes": 1073741824,
+        "maxSizeBytes": 10737418240,
+        "catalogCollation": "SQL_Latin1_General_CP1_CI_AS",
+        "zoneRedundant": false,
+        "readScale": "Disabled",
+        "requestedBackupStorageRedundancy": "Local"
+      }
+    },
+    {
+      "type": "Microsoft.Sql/servers/databases",
+      "apiVersion": "2021-11-01",
+      "name": "[concat(variables('sqlServerName'), '/', variables('devDatabaseName'))]",
+      "location": "[parameters('location')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Sql/servers', variables('sqlServerName'))]"
+      ],
+      "sku": {
+        "name": "[parameters('sqlDatabaseSku')]",
+        "tier": "[if(equals(parameters('sqlDatabaseSku'), 'Basic'), 'Basic', 'Standard')]"
+      },
+      "properties": {
+        "collation": "SQL_Latin1_General_CP1_CI_AS",
+        "maxSizeBytes": 2147483648,
+        "catalogCollation": "SQL_Latin1_General_CP1_CI_AS",
+        "zoneRedundant": false,
+        "readScale": "Disabled",
+        "requestedBackupStorageRedundancy": "Local"
+      }
+    },
+    {
+      "type": "Microsoft.Sql/servers/databases",
+      "apiVersion": "2021-11-01",
+      "name": "[concat(variables('sqlServerName'), '/', variables('testDatabaseName'))]",
+      "location": "[parameters('location')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Sql/servers', variables('sqlServerName'))]"
+      ],
+      "sku": {
+        "name": "[parameters('sqlDatabaseSku')]",
+        "tier": "[if(equals(parameters('sqlDatabaseSku'), 'Basic'), 'Basic', 'Standard')]"
+      },
+      "properties": {
+        "collation": "SQL_Latin1_General_CP1_CI_AS",
+        "maxSizeBytes": 2147483648,
+        "catalogCollation": "SQL_Latin1_General_CP1_CI_AS",
+        "zoneRedundant": false,
+        "readScale": "Disabled",
+        "requestedBackupStorageRedundancy": "Local"
+      }
+    },
+    {
+      "type": "Microsoft.Sql/servers/databases",
+      "apiVersion": "2021-11-01",
+      "name": "[concat(variables('sqlServerName'), '/', variables('uatDatabaseName'))]",
+      "location": "[parameters('location')]",
+      "condition": "[parameters('enableUatDatabase')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Sql/servers', variables('sqlServerName'))]"
+      ],
+      "sku": {
+        "name": "[parameters('sqlDatabaseSku')]",
+        "tier": "[if(equals(parameters('sqlDatabaseSku'), 'Basic'), 'Basic', 'Standard')]"
+      },
+      "properties": {
+        "collation": "SQL_Latin1_General_CP1_CI_AS",
+        "maxSizeBytes": 2147483648,
+        "catalogCollation": "SQL_Latin1_General_CP1_CI_AS",
+        "zoneRedundant": false,
+        "readScale": "Disabled",
+        "requestedBackupStorageRedundancy": "Local"
+      }
+    },
+    {
+      "type": "Microsoft.Sql/servers/databases",
+      "apiVersion": "2021-11-01",
+      "name": "[concat(variables('sqlServerName'), '/', variables('prodDatabaseName'))]",
+      "location": "[parameters('location')]",
+      "condition": "[parameters('enableProdDatabase')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Sql/servers', variables('sqlServerName'))]"
+      ],
+      "sku": {
+        "name": "[parameters('sqlDatabaseSku')]",
+        "tier": "[if(equals(parameters('sqlDatabaseSku'), 'Basic'), 'Basic', 'Standard')]"
+      },
+      "properties": {
+        "collation": "SQL_Latin1_General_CP1_CI_AS",
+        "maxSizeBytes": 2147483648,
         "catalogCollation": "SQL_Latin1_General_CP1_CI_AS",
         "zoneRedundant": false,
         "readScale": "Disabled",
@@ -573,6 +727,14 @@
     "appServiceUrl": {
       "type": "string",
       "value": "[concat('https://', reference(variables('appServiceName')).defaultHostName)]"
+    },
+    "schedappServiceName": {
+      "type": "string",
+      "value": "[variables('schedappServiceName')]"
+    },
+    "schedappServiceUrl": {
+      "type": "string",
+      "value": "[concat('https://', reference(variables('schedappServiceName')).defaultHostName)]"
     },
     "storageAccountName": {
       "type": "string",

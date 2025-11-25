@@ -101,17 +101,36 @@
       "metadata": {
         "description": "Enable public network access for SQL Server"
       }
+    },
+    "enableUatDatabase": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Enable bragi_uat database"
+      }
+    },
+    "enableProdDatabase": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Enable bragi_prod database"
+      }
     }
   },
   "variables": {
     "uniqueSuffix": "[uniqueString(resourceGroup().id, parameters('environment'))]",
     "appServiceName": "[concat(parameters('projectName'), '-app-', parameters('environment'), '-', variables('uniqueSuffix'))]",
+    "schedappServiceName": "[concat(parameters('projectName'), '-schedapp-', parameters('environment'), '-', variables('uniqueSuffix'))]",
     "appServicePlanName": "[concat(parameters('projectName'), '-plan-', parameters('environment'), '-', variables('uniqueSuffix'))]",
     "storageAccountName": "[concat(take(parameters('projectName'), 8), 'stg', take(parameters('environment'), 3), take(variables('uniqueSuffix'), 8))]",
     "sqlServerName": "[concat(parameters('projectName'), '-sql-', parameters('environment'), '-', variables('uniqueSuffix'))]",
     "vnetName": "[concat(parameters('projectName'), '-vnet-', parameters('environment'), '-', variables('uniqueSuffix'))]",
-    "metaDatabaseName": "[concat(parameters('projectName'), '-meta-', parameters('environment'))]",
-    "dwhDatabaseName": "[concat(parameters('projectName'), '-dwh-', parameters('environment'))]",
+    "metaDatabaseName": "bragi_meta",
+    "dwhDatabaseName": "bragi_dw",
+    "devDatabaseName": "bragi_dev",
+    "testDatabaseName": "bragi_test",
+    "uatDatabaseName": "bragi_uat",
+    "prodDatabaseName": "bragi_prod",
     "addressPrefix": "10.0.0.0/16",
     "appServiceSubnetPrefix": "10.0.1.0/24",
     "databaseSubnetPrefix": "10.0.2.0/24",
@@ -185,6 +204,56 @@
       "type": "Microsoft.Web/sites",
       "apiVersion": "2021-02-01",
       "name": "[variables('appServiceName')]",
+      "location": "[parameters('location')]",
+      "kind": "app,linux",
+      "dependsOn": [
+        "[resourceId('Microsoft.Web/serverfarms', variables('appServicePlanName'))]"
+      ],
+      "properties": {
+        "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', variables('appServicePlanName'))]",
+        "siteConfig": {
+          "linuxFxVersion": "DOTNETCORE|6.0",
+          "appSettings": [
+            {
+              "name": "WEBSITES_ENABLE_APP_SERVICE_STORAGE",
+              "value": "false"
+            },
+            {
+              "name": "WEBSITES_ENABLE_HTTPS",
+              "value": "true"
+            },
+            {
+              "name": "StorageAccountName",
+              "value": "[variables('storageAccountName')]"
+            },
+            {
+              "name": "SqlServerName",
+              "value": "[reference(resourceId('Microsoft.Sql/servers', variables('sqlServerName'))).fullyQualifiedDomainName]"
+            },
+            {
+              "name": "MetaDatabaseName",
+              "value": "[variables('metaDatabaseName')]"
+            },
+            {
+              "name": "DwhDatabaseName",
+              "value": "[variables('dwhDatabaseName')]"
+            }
+          ],
+          "ftpsState": "Disabled",
+          "minTlsVersion": "1.2",
+          "httpLoggingEnabled": true,
+          "logsDirectorySizeLimit": 35,
+          "detailedErrorLoggingEnabled": true
+        },
+        "httpsOnly": true,
+        "clientAffinityEnabled": false,
+        "reserved": true
+      }
+    },
+    {
+      "type": "Microsoft.Web/sites",
+      "apiVersion": "2021-02-01",
+      "name": "[variables('schedappServiceName')]",
       "location": "[parameters('location')]",
       "kind": "app,linux",
       "dependsOn": [
@@ -358,6 +427,64 @@
         "maxSizeBytes": 10737418240,
         "requestedServiceObjectiveName": "[parameters('sqlDatabaseSku')]"
       }
+    },
+    {
+      "type": "Microsoft.Sql/servers/databases",
+      "apiVersion": "2021-11-01",
+      "name": "[concat(variables('sqlServerName'), '/', variables('devDatabaseName'))]",
+      "location": "[parameters('location')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Sql/servers', variables('sqlServerName'))]"
+      ],
+      "properties": {
+        "collation": "SQL_Latin1_General_CP1_CI_AS",
+        "maxSizeBytes": 2147483648,
+        "requestedServiceObjectiveName": "[parameters('sqlDatabaseSku')]"
+      }
+    },
+    {
+      "type": "Microsoft.Sql/servers/databases",
+      "apiVersion": "2021-11-01",
+      "name": "[concat(variables('sqlServerName'), '/', variables('testDatabaseName'))]",
+      "location": "[parameters('location')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Sql/servers', variables('sqlServerName'))]"
+      ],
+      "properties": {
+        "collation": "SQL_Latin1_General_CP1_CI_AS",
+        "maxSizeBytes": 2147483648,
+        "requestedServiceObjectiveName": "[parameters('sqlDatabaseSku')]"
+      }
+    },
+    {
+      "type": "Microsoft.Sql/servers/databases",
+      "apiVersion": "2021-11-01",
+      "name": "[concat(variables('sqlServerName'), '/', variables('uatDatabaseName'))]",
+      "location": "[parameters('location')]",
+      "condition": "[parameters('enableUatDatabase')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Sql/servers', variables('sqlServerName'))]"
+      ],
+      "properties": {
+        "collation": "SQL_Latin1_General_CP1_CI_AS",
+        "maxSizeBytes": 2147483648,
+        "requestedServiceObjectiveName": "[parameters('sqlDatabaseSku')]"
+      }
+    },
+    {
+      "type": "Microsoft.Sql/servers/databases",
+      "apiVersion": "2021-11-01",
+      "name": "[concat(variables('sqlServerName'), '/', variables('prodDatabaseName'))]",
+      "location": "[parameters('location')]",
+      "condition": "[parameters('enableProdDatabase')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Sql/servers', variables('sqlServerName'))]"
+      ],
+      "properties": {
+        "collation": "SQL_Latin1_General_CP1_CI_AS",
+        "maxSizeBytes": 2147483648,
+        "requestedServiceObjectiveName": "[parameters('sqlDatabaseSku')]"
+      }
     }
   ],
   "outputs": {
@@ -372,6 +499,14 @@
     "appServiceUrl": {
       "type": "string",
       "value": "[concat('https://', reference(resourceId('Microsoft.Web/sites', variables('appServiceName'))).defaultHostName)]"
+    },
+    "schedappServiceName": {
+      "type": "string",
+      "value": "[variables('schedappServiceName')]"
+    },
+    "schedappServiceUrl": {
+      "type": "string",
+      "value": "[concat('https://', reference(resourceId('Microsoft.Web/sites', variables('schedappServiceName'))).defaultHostName)]"
     },
     "storageAccountName": {
       "type": "string",
@@ -405,6 +540,22 @@
       "type": "string",
       "value": "[variables('dwhDatabaseName')]"
     },
+    "devDatabaseName": {
+      "type": "string",
+      "value": "[variables('devDatabaseName')]"
+    },
+    "testDatabaseName": {
+      "type": "string",
+      "value": "[variables('testDatabaseName')]"
+    },
+    "uatDatabaseName": {
+      "type": "string",
+      "value": "[if(parameters('enableUatDatabase'), variables('uatDatabaseName'), '')]"
+    },
+    "prodDatabaseName": {
+      "type": "string",
+      "value": "[if(parameters('enableProdDatabase'), variables('prodDatabaseName'), '')]"
+    },
     "metaDatabaseConnectionString": {
       "type": "string",
       "value": "[concat('Server=tcp:', reference(resourceId('Microsoft.Sql/servers', variables('sqlServerName'))).fullyQualifiedDomainName, ',1433;Initial Catalog=', variables('metaDatabaseName'), ';Persist Security Info=False;User ID={your_username};Password={your_password};MultipleActiveResultSets=False;Encrypt=True;TrustServerCertificate=False;Connection Timeout=30;')]"
@@ -423,10 +574,13 @@
           "Virtual Network with 4 subnets",
           "App Service Plan",
           "App Service (HTTPS enforced)",
+          "Schedapp Service (HTTPS enforced)",
           "Storage Account (HTTPS enforced)",
           "SQL Server (Port 1433 configured)",
-          "Meta Database",
-          "DWH Database"
+          "bragi_meta Database",
+          "bragi_dw Database",
+          "bragi_dev Database",
+          "bragi_test Database"
         ],
         "securityFeatures": [
           "HTTPS enforced on App Service",

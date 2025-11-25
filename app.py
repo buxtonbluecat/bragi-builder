@@ -724,6 +724,52 @@ def validate_resource_group_name():
         return jsonify({"success": False, "message": str(e)}), 400
 
 
+@app.route('/environments/<environment>/delete-preview', methods=['GET'])
+def get_delete_preview(environment):
+    """Get deletion preview and validation information"""
+    if not deployment_manager:
+        return jsonify({"success": False, "message": "Azure client not configured"}), 400
+    
+    try:
+        project_name = request.args.get('project_name', 'bragi')
+        resource_group_name = request.args.get('resource_group')
+        
+        # Use provided resource group name if available, otherwise try to find it
+        target_rg_name = None
+        
+        if resource_group_name:
+            # Use the provided resource group name directly
+            target_rg_name = resource_group_name
+        else:
+            # Fallback: Find the actual resource group name by looking for Bragi-managed resource groups
+            # that match the environment and project
+            resource_groups = azure_client.list_resource_groups()
+            
+            for rg in resource_groups:
+                if rg.tags and rg.tags.get('CreatedBy') == 'Bragi Builder':
+                    rg_project = rg.tags.get('Project', '')
+                    rg_environment = rg.tags.get('Environment', '')
+                    
+                    # Match by project and environment from tags
+                    if (rg_project.lower() == project_name.lower() and 
+                        rg_environment.lower() == environment.lower()):
+                        target_rg_name = rg.name
+                        break
+        
+        if not target_rg_name:
+            return jsonify({"success": False, "message": f"Environment {environment} not found. Please provide resource_group parameter."}), 404
+        
+        result = deployment_manager.get_deletion_preview(environment, project_name, target_rg_name)
+        
+        if result.get("success"):
+            return jsonify(result)
+        else:
+            return jsonify(result), 404
+            
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 400
+
+
 @app.route('/environments/<environment>', methods=['DELETE'])
 def delete_environment(environment):
     """Delete an environment"""
@@ -732,25 +778,37 @@ def delete_environment(environment):
     
     try:
         project_name = request.args.get('project_name', 'bragi')
+        resource_group_name = request.args.get('resource_group')
         
-        # Find the actual resource group name by looking for Bragi-managed resource groups
-        # that match the environment and project
-        resource_groups = azure_client.list_resource_groups()
+        # Use provided resource group name if available, otherwise try to find it
         target_rg_name = None
         
-        for rg in resource_groups:
-            if rg.tags and rg.tags.get('CreatedBy') == 'Bragi Builder':
-                rg_project = rg.tags.get('Project', '')
-                rg_environment = rg.tags.get('Environment', '')
-                
-                # Match by project and environment from tags
-                if (rg_project.lower() == project_name.lower() and 
-                    rg_environment.lower() == environment.lower()):
-                    target_rg_name = rg.name
-                    break
+        if resource_group_name:
+            # Use the provided resource group name directly
+            target_rg_name = resource_group_name
+        else:
+            # Fallback: Find the actual resource group name by looking for Bragi-managed resource groups
+            # that match the environment and project
+            resource_groups = azure_client.list_resource_groups()
+            
+            for rg in resource_groups:
+                if rg.tags and rg.tags.get('CreatedBy') == 'Bragi Builder':
+                    rg_project = rg.tags.get('Project', '')
+                    rg_environment = rg.tags.get('Environment', '')
+                    
+                    # Match by project and environment from tags
+                    if (rg_project.lower() == project_name.lower() and 
+                        rg_environment.lower() == environment.lower()):
+                        target_rg_name = rg.name
+                        break
         
         if not target_rg_name:
-            return jsonify({"success": False, "message": f"Environment {environment} not found"}), 404
+            return jsonify({"success": False, "message": f"Environment {environment} not found. Please provide resource_group parameter."}), 404
+        
+        # Verify the resource group exists
+        rg = azure_client.get_resource_group(target_rg_name)
+        if not rg:
+            return jsonify({"success": False, "message": f"Resource group {target_rg_name} not found"}), 404
         
         result = deployment_manager.delete_environment(environment, project_name, target_rg_name)
         

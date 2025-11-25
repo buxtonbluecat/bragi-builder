@@ -258,14 +258,15 @@ def deployment_endpoints(environment, project_name):
         click.echo(f"\n🌐 Environment Endpoints for {project_name}-{environment}")
         click.echo("=" * 50)
         
-        # App Service
-        if endpoints.get('app_service'):
-            app = endpoints['app_service']
-            click.echo(f"\n📱 App Service: {app['name']}")
-            click.echo(f"   URL: {app['url']}")
-            click.echo(f"   Hostname: {app['hostname']}")
-            click.echo(f"   State: {app['state']}")
-            click.echo(f"   HTTPS Only: {app['https_only']}")
+        # App Services (plural - can be multiple)
+        if endpoints.get('app_services'):
+            click.echo(f"\n📱 App Services ({len(endpoints['app_services'])}):")
+            for app in endpoints['app_services']:
+                click.echo(f"   • {app['name']}")
+                click.echo(f"     URL: {app['url']}")
+                click.echo(f"     Hostname: {app['hostname']}")
+                click.echo(f"     State: {app['state']}")
+                click.echo(f"     HTTPS Only: {'Yes' if app['https_only'] else 'No'}")
         
         # Storage Account
         if endpoints.get('storage_account'):
@@ -282,6 +283,16 @@ def deployment_endpoints(environment, project_name):
             click.echo(f"   FQDN: {sql['fqdn']}")
             click.echo(f"   Version: {sql['version']}")
             click.echo(f"   State: {sql['state']}")
+            
+            # SQL Databases
+            if endpoints.get('sql_databases'):
+                click.echo(f"\n   📊 Databases ({len(endpoints['sql_databases'])}):")
+                for db in endpoints['sql_databases']:
+                    click.echo(f"      • {db['name']} ({db['status']})")
+                    if db.get('edition'):
+                        click.echo(f"        Edition: {db['edition']}")
+                    if db.get('service_objective'):
+                        click.echo(f"        Service Objective: {db['service_objective']}")
         
         # VNet
         if endpoints.get('vnet'):
@@ -296,7 +307,13 @@ def deployment_endpoints(environment, project_name):
             for ip in endpoints['public_ips']:
                 click.echo(f"   {ip['name']}: {ip['ip_address']} ({ip['allocation_method']})")
         
-        if not any([endpoints.get('app_service'), endpoints.get('storage_account'), 
+        # All Resources
+        if endpoints.get('all_resources'):
+            click.echo(f"\n📋 All Resources ({len(endpoints['all_resources'])}):")
+            for resource in endpoints['all_resources']:
+                click.echo(f"   • {resource['name']} ({resource['type']})")
+        
+        if not any([endpoints.get('app_services'), endpoints.get('storage_account'), 
                    endpoints.get('sql_server'), endpoints.get('vnet'), endpoints.get('public_ips')]):
             click.echo("No public endpoints found in this environment.")
         

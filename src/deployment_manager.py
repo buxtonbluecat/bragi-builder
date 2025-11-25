@@ -284,6 +284,164 @@ class DeploymentManager:
         except Exception as e:
             raise Exception(f"Failed to list resources: {str(e)}")
     
+    def get_deletion_preview(self, environment: str, project_name: str = "bragi", resource_group_name: str = None) -> Dict:
+        """Get preview information and validation for environment deletion"""
+        # Use provided resource group name or construct from project/environment
+        if not resource_group_name:
+            resource_group_name = f"{project_name}-{environment}-rg"
+        
+        try:
+            # Check if resource group exists
+            rg = self.azure_client.get_resource_group(resource_group_name)
+            if not rg:
+                return {
+                    "success": False,
+                    "message": f"Resource group {resource_group_name} not found"
+                }
+            
+            # Get all resources in the resource group
+            resources = self.azure_client.list_resources_in_group(resource_group_name)
+            
+            # Categorize resources by type
+            resource_types = {}
+            resource_list = []
+            for resource in resources:
+                resource_type = resource.type
+                resource_name = resource.name
+                
+                # Count by type
+                if resource_type not in resource_types:
+                    resource_types[resource_type] = 0
+                resource_types[resource_type] += 1
+                
+                # Add to list
+                resource_list.append({
+                    "name": resource_name,
+                    "type": resource_type,
+                    "location": resource.location
+                })
+            
+            # Check for resource locks
+            locks = []
+            try:
+                locks_list = self.azure_client.resource_client.management_locks.list_by_resource_group(resource_group_name)
+                for lock in locks_list:
+                    locks.append({
+                        "name": lock.name,
+                        "level": lock.properties.level,  # CanNotDelete or ReadOnly
+                        "notes": lock.properties.notes if hasattr(lock.properties, 'notes') else None
+                    })
+            except Exception as e:
+                # If we can't check locks, continue anyway
+                print(f"Could not check resource locks: {e}")
+            
+            # Validation checks
+            warnings = []
+            errors = []
+            
+            # Check if production environment
+            if environment.lower() in ['prod', 'production']:
+                warnings.append({
+                    "type": "production",
+                    "message": "⚠️ This is a PRODUCTION environment. Deletion will cause service disruption!",
+                    "severity": "high"
+                })
+            
+            # Check for locks
+            if locks:
+                can_delete_locks = [lock for lock in locks if lock["level"] == "CanNotDelete"]
+                if can_delete_locks:
+                    errors.append({
+                        "type": "resource_locks",
+                        "message": f"❌ Cannot delete: {len(can_delete_locks)} resource lock(s) prevent deletion",
+                        "locks": can_delete_locks
+                    })
+                else:
+                    warnings.append({
+                        "type": "readonly_locks",
+                        "message": f"⚠️ {len(locks)} read-only lock(s) found. These will be removed during deletion.",
+                        "locks": locks
+                    })
+            
+            # Check resource count
+            if len(resources) == 0:
+                warnings.append({
+                    "type": "empty_resource_group",
+                    "message": "ℹ️ Resource group is empty. Deletion will be quick.",
+                    "severity": "low"
+                })
+            elif len(resources) > 50:
+                warnings.append({
+                    "type": "many_resources",
+                    "message": f"⚠️ Large resource group: {len(resources)} resources. Deletion may take several minutes.",
+                    "severity": "medium"
+                })
+            
+            # Check for critical resource types
+            critical_types = [
+                "Microsoft.Sql/servers",
+                "Microsoft.Storage/storageAccounts",
+                "Microsoft.Compute/virtualMachines"
+            ]
+            critical_resources = [r for r in resources if any(ct in r.type for ct in critical_types)]
+            if critical_resources:
+                warnings.append({
+                    "type": "critical_resources",
+                    "message": f"⚠️ Contains {len(critical_resources)} critical resource(s) (SQL, Storage, VMs). Data loss will occur!",
+                    "severity": "high",
+                    "critical_count": len(critical_resources)
+                })
+            
+            # Get resource group tags for additional context
+            tags = rg.tags if rg.tags else {}
+            created_date = tags.get('CreatedDate', 'Unknown')
+            created_by = tags.get('CreatedBy', 'Unknown')
+            
+            return {
+                "success": True,
+                "resource_group": resource_group_name,
+                "environment": environment,
+                "project_name": project_name,
+                "location": rg.location,
+                "resource_count": len(resources),
+                "resource_types": resource_types,
+                "resources": resource_list,
+                "locks": locks,
+                "warnings": warnings,
+                "errors": errors,
+                "can_delete": len(errors) == 0,
+                "metadata": {
+                    "created_date": created_date,
+                    "created_by": created_by,
+                    "tags": tags
+                },
+                "estimated_deletion_time": self._estimate_deletion_time(len(resources), locks)
+            }
+            
+        except Exception as e:
+            return {
+                "success": False,
+                "message": f"Error getting deletion preview: {str(e)}"
+            }
+    
+    def _estimate_deletion_time(self, resource_count: int, locks: List) -> str:
+        """Estimate deletion time based on resource count and locks"""
+        # Base time: ~30 seconds per resource, minimum 2 minutes
+        base_minutes = max(2, int(resource_count * 0.5))
+        
+        # Add time for locks
+        if locks:
+            base_minutes += len(locks) * 1
+        
+        if base_minutes < 5:
+            return f"~{base_minutes} minutes"
+        elif base_minutes < 60:
+            return f"~{base_minutes} minutes"
+        else:
+            hours = base_minutes // 60
+            minutes = base_minutes % 60
+            return f"~{hours}h {minutes}m"
+
     def delete_environment(self, environment: str, project_name: str = "bragi", resource_group_name: str = None) -> Dict:
         """Delete an entire environment by deleting the resource group"""
         # Use provided resource group name or construct from project/environment
@@ -474,30 +632,41 @@ class DeploymentManager:
             resources = self.azure_client.list_resources_in_group(resource_group_name)
             
             endpoints = {
-                "app_service": None,
+                "app_services": [],  # Changed to list to support multiple app services
                 "storage_account": None,
                 "sql_server": None,
+                "sql_databases": [],  # New: list of SQL databases
                 "vnet": None,
-                "public_ips": []
+                "public_ips": [],
+                "all_resources": []  # New: all resources in the resource group
             }
+            
+            sql_server_name = None  # Track SQL server name to fetch databases
             
             for resource in resources:
                 resource_type = resource.type
                 resource_name = resource.name
                 
+                # Add to all_resources list
+                endpoints["all_resources"].append({
+                    "name": resource_name,
+                    "type": resource_type,
+                    "location": resource.location
+                })
+                
                 if "Microsoft.Web/sites" in resource_type:
-                    # Get App Service details
+                    # Get App Service details - add to list instead of overwriting
                     try:
                         app_service = self.azure_client.web_client.web_apps.get(
                             resource_group_name, resource_name
                         )
-                        endpoints["app_service"] = {
+                        endpoints["app_services"].append({
                             "name": resource_name,
                             "url": f"https://{app_service.default_host_name}",
                             "hostname": app_service.default_host_name,
                             "state": app_service.state,
                             "https_only": app_service.https_only
-                        }
+                        })
                     except Exception as e:
                         print(f"Error getting App Service details: {e}")
                 
@@ -522,6 +691,7 @@ class DeploymentManager:
                         sql_server = self.azure_client.sql_client.servers.get(
                             resource_group_name, resource_name
                         )
+                        sql_server_name = resource_name  # Store for fetching databases
                         endpoints["sql_server"] = {
                             "name": resource_name,
                             "fqdn": sql_server.fully_qualified_domain_name,
@@ -568,6 +738,26 @@ class DeploymentManager:
                             })
                     except Exception as e:
                         print(f"Error getting Public IP details: {e}")
+            
+            # Fetch SQL databases if we found a SQL server
+            if sql_server_name:
+                try:
+                    databases = self.azure_client.sql_client.databases.list_by_server(
+                        resource_group_name, sql_server_name
+                    )
+                    for db in databases:
+                        # Skip system databases
+                        if db.name.lower() not in ['master', 'tempdb', 'model', 'msdb']:
+                            endpoints["sql_databases"].append({
+                                "name": db.name,
+                                "status": db.status,
+                                "edition": db.edition if hasattr(db, 'edition') else None,
+                                "service_objective": db.service_objective if hasattr(db, 'service_objective') else None,
+                                "max_size_bytes": db.max_size_bytes if hasattr(db, 'max_size_bytes') else None,
+                                "creation_date": db.creation_date.isoformat() if hasattr(db, 'creation_date') and db.creation_date else None
+                            })
+                except Exception as e:
+                    print(f"Error getting SQL databases: {e}")
             
             return endpoints
             

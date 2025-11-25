@@ -136,14 +136,175 @@ function viewEndpoints(environment, projectName, resourceGroupName) {
 }
 
 function deleteEnvironment(environment, projectName, resourceGroupName) {
-    if (!confirm(`Are you sure you want to delete the environment '${environment}' in project '${projectName}'?\n\nThis will delete the entire resource group and all resources. This action cannot be undone!`)) {
-        return;
+    // First, get deletion preview
+    showDeletePreviewModal(environment, projectName, resourceGroupName);
+}
+
+function showDeletePreviewModal(environment, projectName, resourceGroupName) {
+    // Show loading state
+    const modal = createDeletePreviewModal();
+    document.body.appendChild(modal);
+    const bsModal = new bootstrap.Modal(modal);
+    bsModal.show();
+    
+    // Update modal with loading state
+    const modalBody = modal.querySelector('.modal-body');
+    modalBody.innerHTML = '<div class="text-center"><div class="spinner-border" role="status"></div><p class="mt-2">Loading deletion preview...</p></div>';
+    
+    // Fetch preview data
+    fetch(`/environments/${environment}/delete-preview?project_name=${projectName}&resource_group=${encodeURIComponent(resourceGroupName)}`)
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                displayDeletePreview(modal, data, environment, projectName, resourceGroupName);
+            } else {
+                modalBody.innerHTML = `<div class="alert alert-danger">Error: ${data.message}</div>`;
+            }
+        })
+        .catch(error => {
+            modalBody.innerHTML = `<div class="alert alert-danger">Error loading preview: ${error.message}</div>`;
+        });
+}
+
+function createDeletePreviewModal() {
+    const modal = document.createElement('div');
+    modal.className = 'modal fade';
+    modal.id = 'deletePreviewModal';
+    modal.setAttribute('tabindex', '-1');
+    modal.setAttribute('aria-labelledby', 'deletePreviewModalLabel');
+    modal.setAttribute('aria-hidden', 'true');
+    modal.innerHTML = `
+        <div class="modal-dialog modal-lg modal-dialog-scrollable">
+            <div class="modal-content">
+                <div class="modal-header bg-danger text-white">
+                    <h5 class="modal-title" id="deletePreviewModalLabel">
+                        <i class="fas fa-exclamation-triangle"></i> Confirm Environment Deletion
+                    </h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body" id="deletePreviewBody">
+                    <!-- Content will be populated dynamically -->
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="button" class="btn btn-danger" id="confirmDeleteBtn" disabled>
+                        <i class="fas fa-trash"></i> Confirm Deletion
+                    </button>
+                </div>
+            </div>
+        </div>
+    `;
+    return modal;
+}
+
+function displayDeletePreview(modal, previewData, environment, projectName, resourceGroupName) {
+    const modalBody = document.getElementById('deletePreviewBody');
+    const confirmBtn = document.getElementById('confirmDeleteBtn');
+    
+    let html = `
+        <div class="alert alert-warning">
+            <strong><i class="fas fa-exclamation-triangle"></i> Warning:</strong> This action cannot be undone!
+            All resources in the resource group will be permanently deleted.
+        </div>
+        
+        <h6><i class="fas fa-info-circle"></i> Environment Information</h6>
+        <table class="table table-sm table-bordered mb-4">
+            <tr><th width="40%">Resource Group</th><td><code>${previewData.resource_group}</code></td></tr>
+            <tr><th>Environment</th><td><strong>${previewData.environment}</strong></td></tr>
+            <tr><th>Project</th><td>${previewData.project_name}</td></tr>
+            <tr><th>Location</th><td>${previewData.location}</td></tr>
+            <tr><th>Resource Count</th><td><strong>${previewData.resource_count}</strong> resources</td></tr>
+            <tr><th>Estimated Deletion Time</th><td>${previewData.estimated_deletion_time}</td></tr>
+        </table>
+    `;
+    
+    // Show errors if any (blocking deletion)
+    if (previewData.errors && previewData.errors.length > 0) {
+        html += '<div class="alert alert-danger"><h6><i class="fas fa-ban"></i> Deletion Blocked</h6><ul class="mb-0">';
+        previewData.errors.forEach(error => {
+            html += `<li>${error.message}</li>`;
+        });
+        html += '</ul></div>';
+        confirmBtn.disabled = true;
+    } else {
+        confirmBtn.disabled = false;
+        confirmBtn.onclick = () => {
+            const bsModal = bootstrap.Modal.getInstance(modal);
+            bsModal.hide();
+            proceedWithDeletion(environment, projectName, resourceGroupName);
+        };
     }
     
+    // Show warnings
+    if (previewData.warnings && previewData.warnings.length > 0) {
+        html += '<div class="alert alert-warning"><h6><i class="fas fa-exclamation-triangle"></i> Warnings</h6><ul class="mb-0">';
+        previewData.warnings.forEach(warning => {
+            const severityClass = warning.severity === 'high' ? 'text-danger' : warning.severity === 'medium' ? 'text-warning' : 'text-info';
+            html += `<li class="${severityClass}">${warning.message}</li>`;
+        });
+        html += '</ul></div>';
+    }
+    
+    // Show resource locks
+    if (previewData.locks && previewData.locks.length > 0) {
+        html += '<h6><i class="fas fa-lock"></i> Resource Locks</h6><ul class="mb-4">';
+        previewData.locks.forEach(lock => {
+            const lockBadge = lock.level === 'CanNotDelete' ? 'danger' : 'warning';
+            html += `<li><span class="badge bg-${lockBadge}">${lock.level}</span> ${lock.name}${lock.notes ? ': ' + lock.notes : ''}</li>`;
+        });
+        html += '</ul>';
+    }
+    
+    // Show resource types summary
+    if (previewData.resource_types && Object.keys(previewData.resource_types).length > 0) {
+        html += '<h6><i class="fas fa-list"></i> Resource Types Summary</h6>';
+        html += '<div class="row mb-4">';
+        for (const [type, count] of Object.entries(previewData.resource_types)) {
+            html += `<div class="col-md-6 mb-2"><span class="badge bg-secondary">${type}</span> <strong>${count}</strong></div>`;
+        }
+        html += '</div>';
+    }
+    
+    // Show resources list (collapsible)
+    if (previewData.resources && previewData.resources.length > 0) {
+        html += `
+            <h6>
+                <i class="fas fa-server"></i> Resources to be Deleted (${previewData.resources.length})
+                <button class="btn btn-sm btn-outline-secondary ms-2" type="button" data-bs-toggle="collapse" data-bs-target="#resourcesList">
+                    <i class="fas fa-chevron-down"></i> Show/Hide
+                </button>
+            </h6>
+            <div class="collapse" id="resourcesList">
+                <div class="table-responsive mb-4" style="max-height: 300px; overflow-y: auto;">
+                    <table class="table table-sm table-striped">
+                        <thead class="table-light sticky-top">
+                            <tr>
+                                <th>Resource Name</th>
+                                <th>Type</th>
+                                <th>Location</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+        `;
+        previewData.resources.forEach(resource => {
+            html += `<tr><td><code>${resource.name}</code></td><td><small>${resource.type}</small></td><td>${resource.location}</td></tr>`;
+        });
+        html += `
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        `;
+    }
+    
+    modalBody.innerHTML = html;
+}
+
+function proceedWithDeletion(environment, projectName, resourceGroupName) {
     // Show loading state
     showDeleteProgress(environment, resourceGroupName);
     
-    fetch(`/environments/${environment}?project_name=${projectName}`, {
+    fetch(`/environments/${environment}?project_name=${projectName}&resource_group=${encodeURIComponent(resourceGroupName)}`, {
         method: 'DELETE'
     })
     .then(response => response.json())

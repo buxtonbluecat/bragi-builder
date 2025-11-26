@@ -24,12 +24,27 @@ export PYTHONPATH="${PYTHONPATH}:/home/site/wwwroot"
 PORT=${PORT:-8000}
 export WEBSITES_PORT=$PORT
 
-# Check if gunicorn is available
+# Try multiple ways to find gunicorn
+GUNICORN_CMD=""
 if command -v gunicorn &> /dev/null; then
-    echo "Starting with gunicorn on port $PORT..."
-    # Note: SocketIO requires eventlet or gevent worker class
-    exec gunicorn --bind 0.0.0.0:$PORT --workers 2 --threads 4 --timeout 600 --worker-class eventlet --log-level info app:app
+    GUNICORN_CMD="gunicorn"
+elif python3 -m gunicorn --version &> /dev/null; then
+    GUNICORN_CMD="python3 -m gunicorn"
+elif [ -f "/opt/python/3.11.14/bin/gunicorn" ]; then
+    GUNICORN_CMD="/opt/python/3.11.14/bin/gunicorn"
 else
-    echo "Gunicorn not found, starting with Flask development server on port $PORT..."
+    echo "Gunicorn not found, installing..."
+    pip3 install --user gunicorn eventlet || echo "Failed to install gunicorn"
+    if python3 -m gunicorn --version &> /dev/null; then
+        GUNICORN_CMD="python3 -m gunicorn"
+    fi
+fi
+
+# Start the application
+if [ -n "$GUNICORN_CMD" ]; then
+    echo "Starting with $GUNICORN_CMD on port $PORT..."
+    exec $GUNICORN_CMD --bind 0.0.0.0:$PORT --workers 2 --threads 4 --timeout 600 --worker-class eventlet --log-level info app:app
+else
+    echo "Gunicorn not available, starting with Flask development server on port $PORT..."
     exec python3 app.py
 fi

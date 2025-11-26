@@ -89,6 +89,44 @@
                             <small class="form-text text-muted">Pricing tier for your App Service Plan</small>
                         </div>
 
+                        <!-- Deployment Method -->
+                        <div class="mb-3">
+                            <label for="deployment_method" class="form-label">Deployment Method <span class="text-danger">*</span></label>
+                            <select class="form-select" id="deployment_method" name="deployment_method" required>
+                                <option value="github" selected>GitHub (Recommended for CI/CD)</option>
+                                <option value="docker">Docker Container (More Reliable)</option>
+                            </select>
+                            <small class="form-text text-muted">Choose how to deploy your application</small>
+                        </div>
+
+                        <!-- GitHub Deployment Options -->
+                        <div id="github_options" class="deployment-options">
+                            <div class="mb-3">
+                                <label for="github_repo" class="form-label">GitHub Repository URL</label>
+                                <input type="text" class="form-control" id="github_repo" name="github_repo" 
+                                       placeholder="https://github.com/username/repo.git">
+                                <small class="form-text text-muted">Leave empty to use current repository</small>
+                            </div>
+                            <div class="mb-3">
+                                <label for="github_branch" class="form-label">Branch</label>
+                                <input type="text" class="form-control" id="github_branch" name="github_branch" 
+                                       value="main" placeholder="main">
+                            </div>
+                        </div>
+
+                        <!-- Docker Deployment Options -->
+                        <div id="docker_options" class="deployment-options" style="display: none;">
+                            <div class="mb-3">
+                                <label for="acr_name" class="form-label">Azure Container Registry Name</label>
+                                <input type="text" class="form-control" id="acr_name" name="acr_name" 
+                                       placeholder="bragibuilderacr" pattern="[a-z0-9]{5,50}">
+                                <small class="form-text text-muted">ACR name (5-50 lowercase alphanumeric characters). Will be created if it doesn't exist.</small>
+                            </div>
+                            <div class="alert alert-info">
+                                <i class="fas fa-info-circle"></i> <strong>Docker Deployment:</strong> Requires Docker installed locally. The Dockerfile will be built and pushed to ACR automatically.
+                            </div>
+                        </div>
+
                         <!-- Advanced Settings (Collapsible) -->
                         <div class="mb-3">
                             <button class="btn btn-link p-0" type="button" data-bs-toggle="collapse" data-bs-target="#advancedSettings">
@@ -176,6 +214,37 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
     
+    // Handle deployment method change
+    const deploymentMethodSelect = document.getElementById('deployment_method');
+    const githubOptions = document.getElementById('github_options');
+    const dockerOptions = document.getElementById('docker_options');
+    
+    deploymentMethodSelect.addEventListener('change', function() {
+        if (this.value === 'docker') {
+            githubOptions.style.display = 'none';
+            dockerOptions.style.display = 'block';
+            // Auto-generate ACR name from app service name
+            const acrNameInput = document.getElementById('acr_name');
+            if (!acrNameInput.value && appServiceNameInput.value) {
+                // ACR names must be lowercase and alphanumeric
+                acrNameInput.value = appServiceNameInput.value.toLowerCase().replace(/[^a-z0-9]/g, '') + 'acr';
+            }
+        } else {
+            githubOptions.style.display = 'block';
+            dockerOptions.style.display = 'none';
+        }
+    });
+    
+    // Auto-generate ACR name when app service name changes (for Docker)
+    appServiceNameInput.addEventListener('input', function() {
+        if (deploymentMethodSelect.value === 'docker') {
+            const acrNameInput = document.getElementById('acr_name');
+            if (!acrNameInput.value && this.value) {
+                acrNameInput.value = this.value.toLowerCase().replace(/[^a-z0-9]/g, '') + 'acr';
+            }
+        }
+    });
+    
     // Check App Service name availability on blur
     let nameCheckTimeout;
     appServiceNameInput.addEventListener('blur', function() {
@@ -225,8 +294,28 @@ document.addEventListener('DOMContentLoaded', function() {
             app_service_name: document.getElementById('app_service_name').value,
             location: document.getElementById('location').value,
             app_service_plan: document.getElementById('app_service_plan').value || null,
-            sku: document.getElementById('sku').value
+            sku: document.getElementById('sku').value,
+            deployment_method: document.getElementById('deployment_method').value
         };
+        
+        // Add deployment method specific fields
+        if (formData.deployment_method === 'github') {
+            const githubRepo = document.getElementById('github_repo').value;
+            const githubBranch = document.getElementById('github_branch').value || 'main';
+            if (githubRepo) {
+                formData.github_repo = githubRepo;
+                formData.github_branch = githubBranch;
+            }
+        } else if (formData.deployment_method === 'docker') {
+            const acrName = document.getElementById('acr_name').value;
+            if (!acrName) {
+                alert('Azure Container Registry name is required for Docker deployment');
+                deployBtn.disabled = false;
+                deployBtn.innerHTML = '<i class="fas fa-rocket"></i> Deploy to Azure';
+                return;
+            }
+            formData.acr_name = acrName;
+        }
         
         // Parse custom settings if provided
         const customSettings = document.getElementById('custom_settings').value;

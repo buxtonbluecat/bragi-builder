@@ -254,11 +254,15 @@ class AppDeploymentManager:
                     'error': f"Failed to verify App Service Plan: {str(e)}"
                 }
             
+            # Determine Linux FX version based on deployment method
+            # For Docker, we'll set it later when configuring the container
+            linux_fx_version = 'PYTHON|3.11'  # Default for GitHub deployment
+            
             app_params = {
                 'location': location,
                 'server_farm_id': f"/subscriptions/{self.subscription_id}/resourceGroups/{resource_group}/providers/Microsoft.Web/serverfarms/{plan_name}",
                 'site_config': {
-                    'linux_fx_version': 'PYTHON|3.11',
+                    'linux_fx_version': linux_fx_version,
                     'always_on': True,
                     'web_sockets_enabled': True,
                     'app_settings': []
@@ -500,6 +504,189 @@ class AppDeploymentManager:
                 'error': str(e)
             }
     
+    def deploy_with_docker(self, app_name: str, resource_group: str, 
+                          acr_name: str, location: str = None) -> Dict:
+        """Deploy using Docker container from Azure Container Registry"""
+        try:
+            import os
+            from pathlib import Path
+            
+            # Get ACR login server
+            result = subprocess.run(
+                ['az', 'acr', 'show', '--name', acr_name, '--resource-group', resource_group,
+                 '--query', 'loginServer', '-o', 'tsv'],
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+            
+            if result.returncode != 0:
+                # ACR doesn't exist, create it
+                print(f"Creating ACR: {acr_name}...")
+                create_result = subprocess.run(
+                    ['az', 'acr', 'create',
+                     '--name', acr_name,
+                     '--resource-group', resource_group,
+                     '--sku', 'Basic',
+                     '--admin-enabled', 'true'],
+                    capture_output=True,
+                    text=True,
+                    timeout=120
+                )
+                
+                if create_result.returncode != 0:
+                    return {
+                        'success': False,
+                        'error': f'Failed to create ACR: {create_result.stderr}'
+                    }
+                
+                # Get login server after creation
+                result = subprocess.run(
+                    ['az', 'acr', 'show', '--name', acr_name, '--resource-group', resource_group,
+                     '--query', 'loginServer', '-o', 'tsv'],
+                    capture_output=True,
+                    text=True,
+                    timeout=30
+                )
+            
+            acr_login_server = result.stdout.strip()
+            
+            # Get ACR credentials
+            username_result = subprocess.run(
+                ['az', 'acr', 'credential', 'show', '--name', acr_name,
+                 '--query', 'username', '-o', 'tsv'],
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+            
+            password_result = subprocess.run(
+                ['az', 'acr', 'credential', 'show', '--name', acr_name,
+                 '--query', 'passwords[0].value', '-o', 'tsv'],
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+            
+            if username_result.returncode != 0 or password_result.returncode != 0:
+                return {
+                    'success': False,
+                    'error': 'Failed to get ACR credentials'
+                }
+            
+            acr_username = username_result.stdout.strip()
+            acr_password = password_result.stdout.strip()
+            
+            # Build Docker image locally (requires Docker to be installed)
+            # Get the project root directory
+            project_root = Path(__file__).parent.parent.parent
+            dockerfile_path = project_root / 'Dockerfile'
+            
+            if not dockerfile_path.exists():
+                return {
+                    'success': False,
+                    'error': 'Dockerfile not found. Please ensure Dockerfile exists in the project root.'
+                }
+            
+            # Check if Docker is available
+            docker_check = subprocess.run(
+                ['docker', '--version'],
+                capture_output=True,
+                timeout=5
+            )
+            
+            if docker_check.returncode != 0:
+                return {
+                    'success': False,
+                    'error': 'Docker is not installed or not available. Please install Docker to use Docker deployment.'
+                }
+            
+            # Login to ACR
+            print(f"Logging into ACR: {acr_login_server}...")
+            login_result = subprocess.run(
+                ['az', 'acr', 'login', '--name', acr_name],
+                capture_output=True,
+                text=True,
+                timeout=60
+            )
+            
+            if login_result.returncode != 0:
+                return {
+                    'success': False,
+                    'error': f'Failed to login to ACR: {login_result.stderr}'
+                }
+            
+            # Build and push Docker image
+            image_name = f"{acr_login_server}/bragi-builder:latest"
+            print(f"Building Docker image: {image_name}...")
+            
+            build_result = subprocess.run(
+                ['az', 'acr', 'build', '--registry', acr_name,
+                 '--image', 'bragi-builder:latest', '.'],
+                cwd=str(project_root),
+                capture_output=True,
+                text=True,
+                timeout=1800  # 30 minutes for build
+            )
+            
+            if build_result.returncode != 0:
+                return {
+                    'success': False,
+                    'error': f'Docker build failed: {build_result.stderr}',
+                    'output': build_result.stdout
+                }
+            
+            # Configure App Service to use Docker image
+            print(f"Configuring App Service to use Docker image...")
+            config_result = subprocess.run(
+                ['az', 'webapp', 'config', 'container', 'set',
+                 '--name', app_name,
+                 '--resource-group', resource_group,
+                 '--docker-custom-image-name', image_name,
+                 '--docker-registry-server-url', f'https://{acr_login_server}',
+                 '--docker-registry-server-user', acr_username,
+                 '--docker-registry-server-password', acr_password],
+                capture_output=True,
+                text=True,
+                timeout=60
+            )
+            
+            if config_result.returncode != 0:
+                return {
+                    'success': False,
+                    'error': f'Failed to configure container: {config_result.stderr}',
+                    'output': config_result.stdout
+                }
+            
+            # Set port
+            subprocess.run(
+                ['az', 'webapp', 'config', 'appsettings', 'set',
+                 '--name', app_name,
+                 '--resource-group', resource_group,
+                 '--settings', 'PORT=8000', 'WEBSITES_PORT=8000'],
+                capture_output=True,
+                timeout=30
+            )
+            
+            return {
+                'success': True,
+                'message': 'Docker deployment completed successfully',
+                'acr_name': acr_name,
+                'image_name': image_name,
+                'output': build_result.stdout
+            }
+            
+        except subprocess.TimeoutExpired:
+            return {
+                'success': False,
+                'error': 'Docker deployment timed out'
+            }
+        except Exception as e:
+            return {
+                'success': False,
+                'error': str(e)
+            }
+    
     def deploy_application(self, app_name: str, resource_group: str, source_path: str = '.') -> Dict:
         """Deploy application code to App Service"""
         try:
@@ -642,6 +829,29 @@ fi
                 'error_trace': error_trace
             }
     
+    def _get_next_steps(self, config: Dict, deployment_method: str) -> List[str]:
+        """Get next steps based on deployment method"""
+        next_steps = []
+        
+        if deployment_method == 'docker':
+            next_steps = [
+                'Docker image has been built and deployed to Azure Container Registry',
+                'App Service is configured to use the Docker container',
+                'Configure Azure AD authentication in App Service settings',
+                'Set environment variables (AZURE_AD_CLIENT_ID, AZURE_AD_CLIENT_SECRET, etc.)',
+                'Grant Managed Identity permissions to access Azure resources'
+            ]
+        else:
+            next_steps = [
+                'Deploy application code using: az webapp up --name ' + config['app_service_name'] + ' --resource-group ' + config['resource_group'],
+                'Configure Azure AD authentication in App Service settings',
+                'Set environment variables (AZURE_AD_CLIENT_ID, AZURE_AD_CLIENT_SECRET, etc.)',
+                'Grant Managed Identity permissions to access Azure resources',
+                'Configure Azure Files mount for SQLite persistence (optional)'
+            ]
+        
+        return next_steps
+    
     def deploy_bragi_builder(self, config: Dict) -> Dict:
         """Complete deployment of Bragi Builder to Azure App Service"""
         deployment_id = f"self-deploy-{int(time.time())}"
@@ -779,12 +989,21 @@ fi
             
             # Step 7: Configure application settings
             print(f"Step 7: Configuring application settings...")
+            deployment_method = config.get('deployment_method', 'github')
+            
+            # Base settings
             app_settings = {
-                'SCM_DO_BUILD_DURING_DEPLOYMENT': 'true',
-                'ENABLE_ORYX_BUILD': 'true',
-                'PYTHON_VERSION': '3.11',
-                'WEBSITES_PORT': '8000'
+                'WEBSITES_PORT': '8000',
+                'PORT': '8000'
             }
+            
+            # Add GitHub/Oryx settings only for non-Docker deployments
+            if deployment_method != 'docker':
+                app_settings.update({
+                    'SCM_DO_BUILD_DURING_DEPLOYMENT': 'true',
+                    'ENABLE_ORYX_BUILD': 'true',
+                    'PYTHON_VERSION': '3.11'
+                })
             
             # Add custom settings from config
             if config.get('app_settings'):
@@ -801,33 +1020,110 @@ fi
             else:
                 steps.append({'step': 'app_settings', 'status': 'warning', 'message': f"Settings warning: {settings_result.get('error')}"})
             
-            # Step 8: Deploy application code
-            print(f"Step 8: Deploying application code to App Service '{config['app_service_name']}'...")
-            deploy_result = self.deploy_application(
-                config['app_service_name'],
-                config['resource_group'],
-                config.get('source_path', '.')
-            )
+            # Step 8: Deploy application code (GitHub or Docker)
+            deployment_method = config.get('deployment_method', 'github')
+            print(f"Step 8: Deploying application using {deployment_method}...")
             
-            if deploy_result['success']:
-                steps.append({
-                    'step': 'code_deployment', 
-                    'status': 'completed', 
-                    'message': 'Application code deployed successfully'
-                })
+            if deployment_method == 'docker':
+                # Docker deployment
+                acr_name = config.get('acr_name')
+                if not acr_name:
+                    steps.append({
+                        'step': 'docker_deployment', 
+                        'status': 'failed', 
+                        'message': 'ACR name is required for Docker deployment'
+                    })
+                    return {
+                        'success': False,
+                        'deployment_id': deployment_id,
+                        'error': 'ACR name is required for Docker deployment',
+                        'steps': steps
+                    }
+                
+                deploy_result = self.deploy_with_docker(
+                    config['app_service_name'],
+                    config['resource_group'],
+                    acr_name,
+                    config['location']
+                )
+                
+                if deploy_result['success']:
+                    steps.append({
+                        'step': 'docker_deployment', 
+                        'status': 'completed', 
+                        'message': f"Docker deployment completed successfully (ACR: {acr_name})",
+                        'acr_name': acr_name,
+                        'image_name': deploy_result.get('image_name')
+                    })
+                else:
+                    error_msg = deploy_result.get('error', 'Unknown error')
+                    steps.append({
+                        'step': 'docker_deployment', 
+                        'status': 'warning', 
+                        'message': f"Docker deployment had issues: {error_msg}",
+                        'error': error_msg
+                    })
+                    print(f"Warning: Docker deployment failed: {error_msg}")
+                    if deploy_result.get('output'):
+                        print(f"Deployment output: {deploy_result['output']}")
             else:
-                # Don't fail the entire deployment if code deployment fails
-                # The infrastructure is created, user can deploy code manually
-                error_msg = deploy_result.get('error', 'Unknown error')
-                steps.append({
-                    'step': 'code_deployment', 
-                    'status': 'warning', 
-                    'message': f'Code deployment had issues: {error_msg}. You can deploy manually using: az webapp up --name {config["app_service_name"]} --resource-group {config["resource_group"]}',
-                    'error': error_msg
-                })
-                print(f"Warning: Code deployment failed: {error_msg}")
-                if deploy_result.get('output'):
-                    print(f"Deployment output: {deploy_result['output']}")
+                # GitHub deployment (default)
+                github_repo = config.get('github_repo')
+                github_branch = config.get('github_branch', 'main')
+                
+                # If GitHub repo provided, configure GitHub deployment
+                if github_repo:
+                    print(f"Configuring GitHub deployment: {github_repo} (branch: {github_branch})")
+                    github_config_result = self.configure_github_deployment(
+                        config['app_service_name'],
+                        config['resource_group'],
+                        github_repo,
+                        github_branch
+                    )
+                    
+                    if github_config_result['success']:
+                        steps.append({
+                            'step': 'github_config', 
+                            'status': 'completed', 
+                            'message': f'GitHub deployment configured: {github_repo}'
+                        })
+                        
+                        # Trigger deployment
+                        deploy_result = self.deploy_from_github(
+                            config['app_service_name'],
+                            config['resource_group'],
+                            github_repo,
+                            github_branch
+                        )
+                    else:
+                        deploy_result = github_config_result
+                else:
+                    # Use direct code deployment (az webapp up)
+                    deploy_result = self.deploy_application(
+                        config['app_service_name'],
+                        config['resource_group'],
+                        config.get('source_path', '.')
+                    )
+                
+                if deploy_result['success']:
+                    steps.append({
+                        'step': 'code_deployment', 
+                        'status': 'completed', 
+                        'message': 'Application code deployed successfully'
+                    })
+                else:
+                    # Don't fail the entire deployment if code deployment fails
+                    # The infrastructure is created, user can deploy code manually
+                    error_msg = deploy_result.get('error', 'Unknown error')
+                    steps.append({
+                        'step': 'code_deployment', 
+                        'status': 'warning', 
+                        'message': f'Code deployment had issues: {error_msg}. You can deploy manually using: az webapp up --name {config["app_service_name"]} --resource-group {config["resource_group"]}',
+                        'error': error_msg
+                    })
+                    print(f"Warning: Code deployment failed: {error_msg}")
+                    if deploy_result.get('output'):
+                        print(f"Deployment output: {deploy_result['output']}")
             
             # Construct App Service URL
             app_url = f"https://{config['app_service_name']}.azurewebsites.net"
@@ -851,13 +1147,7 @@ fi
                 'resource_group': config['resource_group'],
                 'steps': steps,
                 'message': 'Bragi Builder infrastructure deployed successfully!',
-                'next_steps': [
-                    'Deploy application code using: az webapp up --name ' + config['app_service_name'] + ' --resource-group ' + config['resource_group'],
-                    'Configure Azure AD authentication in App Service settings',
-                    'Set environment variables (AZURE_AD_CLIENT_ID, AZURE_AD_CLIENT_SECRET, etc.)',
-                    'Grant Managed Identity permissions to access Azure resources',
-                    'Configure Azure Files mount for SQLite persistence (optional)'
-                ]
+                'next_steps': self._get_next_steps(config, deployment_method)
             }
             
         except Exception as e:

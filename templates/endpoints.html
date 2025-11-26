@@ -8,9 +8,15 @@
         <div class="col-12">
             <div class="d-flex justify-content-between align-items-center mb-4">
                 <h2>Environment Endpoints</h2>
-                <button class="btn btn-outline-secondary" onclick="window.close()">
-                    <i class="fas fa-times"></i> Close
-                </button>
+                <div>
+                    <a href="/environments/{{ environment }}/endpoints/pdf?project_name={{ project_name }}&resource_group={{ resource_group_name }}" 
+                       class="btn btn-danger me-2" target="_blank">
+                        <i class="fas fa-file-pdf"></i> Export PDF
+                    </a>
+                    <button class="btn btn-outline-secondary" onclick="window.close()">
+                        <i class="fas fa-times"></i> Close
+                    </button>
+                </div>
             </div>
             
             <div class="alert alert-info">

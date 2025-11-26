@@ -7,9 +7,22 @@ import json
 import threading
 import time
 import datetime
-from flask import Flask, render_template, request, jsonify, redirect, url_for, flash, session
+from flask import Flask, render_template, request, jsonify, redirect, url_for, flash, session, Response
 from flask_socketio import SocketIO, emit
 from dotenv import load_dotenv
+from datetime import datetime
+try:
+    from reportlab.lib.pagesizes import letter, A4
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import inch
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak
+    from reportlab.lib import colors
+    from reportlab.lib.enums import TA_LEFT, TA_CENTER
+    from reportlab.pdfgen import canvas
+    REPORTLAB_AVAILABLE = True
+except ImportError:
+    REPORTLAB_AVAILABLE = False
+    print("Warning: ReportLab not available. PDF export will not work.")
 from src.azure_client import AzureClient
 from src.template_manager import TemplateManager
 from src.deployment_manager import DeploymentManager
@@ -671,6 +684,204 @@ def environment_endpoints(environment):
     except Exception as e:
         flash(f"Error loading endpoints: {str(e)}", "error")
         return redirect(url_for('environments_page'))
+
+
+@app.route('/environments/<environment>/endpoints/pdf')
+def environment_endpoints_pdf(environment):
+    """Generate PDF of environment endpoints with clickable URLs"""
+    if not REPORTLAB_AVAILABLE:
+        flash("PDF export requires ReportLab library. Please install it: pip install reportlab", "error")
+        return redirect(url_for('environment_endpoints', environment=environment, 
+                              project_name=request.args.get('project_name', 'bragi'),
+                              resource_group=request.args.get('resource_group')))
+    
+    if not deployment_manager:
+        return jsonify({'error': 'Azure client not configured'}), 500
+    
+    try:
+        from io import BytesIO
+        
+        project_name = request.args.get('project_name', 'bragi')
+        specified_rg = request.args.get('resource_group')
+        
+        target_rg_name = None
+        
+        if specified_rg:
+            target_rg_name = specified_rg
+        else:
+            resource_groups = azure_client.list_resource_groups()
+            for rg in resource_groups:
+                if rg.tags and rg.tags.get('CreatedBy') == 'Bragi Builder':
+                    rg_project = rg.tags.get('Project', '')
+                    rg_environment = rg.tags.get('Environment', '')
+                    if (rg_project.lower() == project_name.lower() and 
+                        rg_environment.lower() == environment.lower()):
+                        target_rg_name = rg.name
+                        break
+        
+        if not target_rg_name:
+            return jsonify({'error': f'Environment {environment} not found'}), 404
+        
+        endpoints = deployment_manager.get_environment_endpoints(environment, project_name, target_rg_name)
+        
+        # Create PDF in memory
+        buffer = BytesIO()
+        doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=72, leftMargin=72, topMargin=72, bottomMargin=72)
+        story = []
+        
+        # Styles
+        styles = getSampleStyleSheet()
+        title_style = ParagraphStyle(
+            'CustomTitle',
+            parent=styles['Heading1'],
+            fontSize=18,
+            textColor=colors.HexColor('#0066cc'),
+            spaceAfter=12,
+            alignment=TA_LEFT
+        )
+        heading_style = ParagraphStyle(
+            'CustomHeading',
+            parent=styles['Heading2'],
+            fontSize=14,
+            textColor=colors.HexColor('#0066cc'),
+            spaceAfter=10,
+            spaceBefore=12
+        )
+        normal_style = styles['Normal']
+        url_style = ParagraphStyle(
+            'URLStyle',
+            parent=styles['Normal'],
+            textColor=colors.HexColor('#0066cc'),
+            underline=True,
+            fontSize=10
+        )
+        
+        # Title
+        story.append(Paragraph("Environment Endpoints Report", title_style))
+        story.append(Spacer(1, 0.2*inch))
+        
+        # Header info
+        header_text = f"<b>Environment:</b> {environment} | <b>Project:</b> {project_name} | <b>Resource Group:</b> {target_rg_name}<br/>"
+        header_text += f"<b>Generated:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        story.append(Paragraph(header_text, normal_style))
+        story.append(Spacer(1, 0.3*inch))
+        
+        # App Services
+        if endpoints.get('app_services'):
+            story.append(Paragraph(f"📱 App Services ({len(endpoints['app_services'])})", heading_style))
+            for app in endpoints['app_services']:
+                story.append(Paragraph(f"<b>{app['name']}</b>", normal_style))
+                # Create clickable URL
+                url_text = f'<link href="{app["url"]}" color="blue"><u>{app["url"]}</u></link>'
+                story.append(Paragraph(f"<b>URL:</b> {url_text}", url_style))
+                story.append(Paragraph(f"<b>Hostname:</b> {app['hostname']}", normal_style))
+                story.append(Paragraph(f"<b>State:</b> {app['state']}", normal_style))
+                story.append(Paragraph(f"<b>HTTPS Only:</b> {'Yes' if app['https_only'] else 'No'}", normal_style))
+                story.append(Spacer(1, 0.15*inch))
+        
+        # Storage Account
+        if endpoints.get('storage_account'):
+            storage = endpoints['storage_account']
+            story.append(Paragraph("💾 Storage Account", heading_style))
+            story.append(Paragraph(f"<b>{storage['name']}</b>", normal_style))
+            url_text = f'<link href="{storage["primary_endpoint"]}" color="blue"><u>{storage["primary_endpoint"]}</u></link>'
+            story.append(Paragraph(f"<b>Primary Endpoint:</b> {url_text}", url_style))
+            story.append(Paragraph(f"<b>Location:</b> {storage['primary_location']}", normal_style))
+            story.append(Paragraph(f"<b>Status:</b> {storage['status']}", normal_style))
+            story.append(Spacer(1, 0.2*inch))
+        
+        # SQL Server
+        if endpoints.get('sql_server'):
+            sql = endpoints['sql_server']
+            story.append(Paragraph("🗄️ SQL Server", heading_style))
+            story.append(Paragraph(f"<b>{sql['name']}</b>", normal_style))
+            story.append(Paragraph(f"<b>FQDN:</b> {sql['fqdn']}", normal_style))
+            story.append(Paragraph(f"<b>Version:</b> {sql['version']}", normal_style))
+            story.append(Paragraph(f"<b>State:</b> {sql['state']}", normal_style))
+            
+            if endpoints.get('sql_databases'):
+                story.append(Spacer(1, 0.1*inch))
+                story.append(Paragraph(f"📊 Databases ({len(endpoints['sql_databases'])})", normal_style))
+                for db in endpoints['sql_databases']:
+                    db_info = f"• <b>{db['name']}</b> ({db['status']})"
+                    if db.get('edition'):
+                        db_info += f" - {db['edition']}"
+                    if db.get('service_objective'):
+                        db_info += f" ({db['service_objective']})"
+                    story.append(Paragraph(db_info, normal_style))
+            story.append(Spacer(1, 0.2*inch))
+        
+        # Virtual Network
+        if endpoints.get('vnet'):
+            vnet = endpoints['vnet']
+            story.append(Paragraph("🌐 Virtual Network", heading_style))
+            story.append(Paragraph(f"<b>{vnet['name']}</b>", normal_style))
+            address_space = ', '.join(vnet.get('address_space', []))
+            story.append(Paragraph(f"<b>Address Space:</b> {address_space}", normal_style))
+            subnets = ', '.join(vnet.get('subnets', []))
+            story.append(Paragraph(f"<b>Subnets:</b> {subnets}", normal_style))
+            story.append(Spacer(1, 0.2*inch))
+        
+        # Public IPs
+        if endpoints.get('public_ips'):
+            story.append(Paragraph("🔗 Public IP Addresses", heading_style))
+            table_data = [['Name', 'IP Address', 'Allocation Method', 'State']]
+            for ip in endpoints['public_ips']:
+                table_data.append([ip['name'], ip['ip_address'], ip['allocation_method'], ip.get('state', 'N/A')])
+            table = Table(table_data, colWidths=[2*inch, 1.5*inch, 1.5*inch, 1*inch])
+            table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#0066cc')),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, 0), 10),
+                ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+                ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+                ('GRID', (0, 0), (-1, -1), 1, colors.black),
+                ('FONTSIZE', (0, 1), (-1, -1), 9),
+            ]))
+            story.append(table)
+            story.append(Spacer(1, 0.2*inch))
+        
+        # All Resources
+        if endpoints.get('all_resources'):
+            story.append(Paragraph(f"📋 All Resources ({len(endpoints['all_resources'])})", heading_style))
+            table_data = [['Resource Name', 'Resource Type', 'Location']]
+            for resource in endpoints['all_resources']:
+                table_data.append([resource['name'], resource['type'], resource.get('location', 'N/A')])
+            table = Table(table_data, colWidths=[2.5*inch, 2.5*inch, 1*inch])
+            table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#333333')),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, 0), 9),
+                ('BOTTOMPADDING', (0, 0), (-1, 0), 10),
+                ('BACKGROUND', (0, 1), (-1, -1), colors.lightgrey),
+                ('GRID', (0, 0), (-1, -1), 1, colors.black),
+                ('FONTSIZE', (0, 1), (-1, -1), 8),
+            ]))
+            story.append(table)
+        
+        # Build PDF
+        doc.build(story)
+        pdf_data = buffer.getvalue()
+        buffer.close()
+        
+        # Create filename
+        filename = f"{project_name}-{environment}-endpoints-{datetime.now().strftime('%Y%m%d')}.pdf"
+        
+        return Response(
+            pdf_data,
+            mimetype='application/pdf',
+            headers={
+                'Content-Disposition': f'attachment; filename={filename}',
+                'Content-Type': 'application/pdf'
+            }
+        )
+    except Exception as e:
+        import traceback
+        return jsonify({'error': f'Error generating PDF: {str(e)}', 'traceback': traceback.format_exc()}), 500
 
 
 @app.route('/resource-groups')

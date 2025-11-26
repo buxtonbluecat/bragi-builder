@@ -38,8 +38,11 @@ class AzureADAuth:
             self.redirect_uri = os.getenv('AZURE_AD_REDIRECT_URI_PROD', 
                                          'http://localhost:8080/login/authorized')
         
-        # Authority URL
-        self.authority = f"https://login.microsoftonline.com/{self.tenant_id}"
+        # Authority URL (only set if tenant_id is available)
+        if self.tenant_id:
+            self.authority = f"https://login.microsoftonline.com/{self.tenant_id}"
+        else:
+            self.authority = None
         
         # Scopes for authentication
         self.scopes = ["User.Read"]

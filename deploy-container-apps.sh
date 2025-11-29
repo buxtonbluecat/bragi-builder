@@ -82,3 +82,5 @@ echo "App URL: https://${APP_URL}"
 echo ""
 echo "To view logs:"
 echo "  az containerapp logs show --name $APP_NAME --resource-group $RESOURCE_GROUP --follow"
+
+

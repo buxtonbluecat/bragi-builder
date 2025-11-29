@@ -142,3 +142,5 @@ echo "To view logs:"
 echo "  az webapp log tail --name $APP_SERVICE_NAME --resource-group $RESOURCE_GROUP"
 
 
+
+

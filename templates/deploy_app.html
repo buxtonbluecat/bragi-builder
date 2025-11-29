@@ -93,14 +93,39 @@
                         <div class="mb-3">
                             <label for="deployment_method" class="form-label">Deployment Method <span class="text-danger">*</span></label>
                             <select class="form-select" id="deployment_method" name="deployment_method" required>
-                                <option value="github" selected>GitHub (Recommended for CI/CD)</option>
-                                <option value="docker">Docker Container (More Reliable)</option>
+                                <option value="docker" selected>🐳 Docker Container (Recommended - Most Reliable)</option>
+                                <option value="github">📦 GitHub (CI/CD Integration)</option>
                             </select>
-                            <small class="form-text text-muted">Choose how to deploy your application</small>
+                            <small class="form-text text-muted">
+                                <strong>Docker:</strong> Builds container locally and deploys to Azure Container Registry (requires Docker Desktop)<br>
+                                <strong>GitHub:</strong> Uses Azure's Oryx build system (may have dependency issues)
+                            </small>
+                        </div>
+
+                        <!-- Docker Deployment Options -->
+                        <div id="docker_options" class="deployment-options">
+                            <div class="mb-3">
+                                <label for="acr_name" class="form-label">Azure Container Registry Name <span class="text-danger">*</span></label>
+                                <input type="text" class="form-control" id="acr_name" name="acr_name" 
+                                       placeholder="bragibuilderacr" pattern="[a-z0-9]{5,50}" required>
+                                <small class="form-text text-muted">ACR name (5-50 lowercase alphanumeric characters). Will be created if it doesn't exist.</small>
+                            </div>
+                            <div class="alert alert-success">
+                                <i class="fas fa-check-circle"></i> <strong>Docker Deployment Benefits:</strong>
+                                <ul class="mb-0 mt-2">
+                                    <li>All dependencies installed during build (more reliable)</li>
+                                    <li>Consistent environment across deployments</li>
+                                    <li>Faster startup times</li>
+                                    <li>Easier to debug and troubleshoot</li>
+                                </ul>
+                            </div>
+                            <div class="alert alert-warning">
+                                <i class="fas fa-exclamation-triangle"></i> <strong>Requirements:</strong> Docker Desktop must be installed and running locally.
+                            </div>
                         </div>
 
                         <!-- GitHub Deployment Options -->
-                        <div id="github_options" class="deployment-options">
+                        <div id="github_options" class="deployment-options" style="display: none;">
                             <div class="mb-3">
                                 <label for="github_repo" class="form-label">GitHub Repository URL</label>
                                 <input type="text" class="form-control" id="github_repo" name="github_repo" 
@@ -112,18 +137,8 @@
                                 <input type="text" class="form-control" id="github_branch" name="github_branch" 
                                        value="main" placeholder="main">
                             </div>
-                        </div>
-
-                        <!-- Docker Deployment Options -->
-                        <div id="docker_options" class="deployment-options" style="display: none;">
-                            <div class="mb-3">
-                                <label for="acr_name" class="form-label">Azure Container Registry Name</label>
-                                <input type="text" class="form-control" id="acr_name" name="acr_name" 
-                                       placeholder="bragibuilderacr" pattern="[a-z0-9]{5,50}">
-                                <small class="form-text text-muted">ACR name (5-50 lowercase alphanumeric characters). Will be created if it doesn't exist.</small>
-                            </div>
                             <div class="alert alert-info">
-                                <i class="fas fa-info-circle"></i> <strong>Docker Deployment:</strong> Requires Docker installed locally. The Dockerfile will be built and pushed to ACR automatically.
+                                <i class="fas fa-info-circle"></i> <strong>GitHub Deployment:</strong> Uses Azure's Oryx build system. May take longer and can have dependency issues.
                             </div>
                         </div>
 
@@ -165,13 +180,15 @@
                     <h6 class="mb-0"><i class="fas fa-info-circle"></i> What Will Be Created</h6>
                 </div>
                 <div class="card-body">
-                    <ul class="list-unstyled mb-0">
+                    <ul class="list-unstyled mb-0" id="resources-list">
                         <li class="mb-2"><i class="fas fa-check text-success"></i> Resource Group</li>
                         <li class="mb-2"><i class="fas fa-check text-success"></i> App Service Plan (Linux)</li>
                         <li class="mb-2"><i class="fas fa-check text-success"></i> App Service (Python 3.11)</li>
                         <li class="mb-2"><i class="fas fa-check text-success"></i> Managed Identity</li>
                         <li class="mb-2"><i class="fas fa-check text-success"></i> WebSocket Support</li>
-                        <li class="mb-2"><i class="fas fa-check text-success"></i> Application Code Deployment</li>
+                        <li class="mb-2" id="deployment-resource"><i class="fas fa-check text-success"></i> Application Code Deployment</li>
+                        <li class="mb-2" id="docker-resource" style="display: none;"><i class="fas fa-check text-success"></i> Azure Container Registry (ACR)</li>
+                        <li class="mb-2" id="docker-resource2" style="display: none;"><i class="fas fa-check text-success"></i> Docker Image Build & Push</li>
                     </ul>
                     <hr>
                     <div class="alert alert-warning small mb-0">
@@ -223,6 +240,10 @@ document.addEventListener('DOMContentLoaded', function() {
         if (this.value === 'docker') {
             githubOptions.style.display = 'none';
             dockerOptions.style.display = 'block';
+            // Show Docker-specific resources
+            document.getElementById('docker-resource').style.display = 'list-item';
+            document.getElementById('docker-resource2').style.display = 'list-item';
+            document.getElementById('deployment-resource').textContent = ' Docker Container Deployment';
             // Auto-generate ACR name from app service name
             const acrNameInput = document.getElementById('acr_name');
             if (!acrNameInput.value && appServiceNameInput.value) {
@@ -232,8 +253,17 @@ document.addEventListener('DOMContentLoaded', function() {
         } else {
             githubOptions.style.display = 'block';
             dockerOptions.style.display = 'none';
+            // Hide Docker-specific resources
+            document.getElementById('docker-resource').style.display = 'none';
+            document.getElementById('docker-resource2').style.display = 'none';
+            document.getElementById('deployment-resource').textContent = ' Application Code Deployment';
         }
     });
+    
+    // Initialize on page load
+    if (deploymentMethodSelect.value === 'docker') {
+        deploymentMethodSelect.dispatchEvent(new Event('change'));
+    }
     
     // Auto-generate ACR name when app service name changes (for Docker)
     appServiceNameInput.addEventListener('input', function() {

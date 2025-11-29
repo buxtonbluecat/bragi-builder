@@ -98,3 +98,5 @@ echo "App URL: https://${APP_NAME}.azurewebsites.net"
 echo ""
 echo "To view logs:"
 echo "  az webapp log tail --name $APP_NAME --resource-group $RESOURCE_GROUP"
+
+

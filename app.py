@@ -363,6 +363,16 @@ def logout():
     return redirect(url_for('index'))
 
 
+@app.route('/health')
+def health():
+    """Health check endpoint for Azure App Service startup probe"""
+    return jsonify({
+        'status': 'healthy',
+        'service': 'bragi-builder',
+        'timestamp': datetime.now().isoformat()
+    }), 200
+
+
 @app.route('/')
 def index():
     """Main dashboard"""

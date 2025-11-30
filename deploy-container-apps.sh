@@ -32,9 +32,15 @@ fi
 echo "ACR: $ACR_LOGIN_SERVER"
 echo ""
 
-# Build and push Docker image
-echo "🔨 Building and pushing Docker image..."
-az acr build --registry $ACR_NAME --image bragi-builder:latest .
+# Build and push Docker image (skip if already exists, or use existing)
+echo "🔨 Checking Docker image..."
+if az acr repository show-tags --name $ACR_NAME --repository bragi-builder --query "[?name=='latest']" -o tsv 2>/dev/null | grep -q latest; then
+    echo "✓ Image already exists in ACR, skipping build..."
+    echo "  (To rebuild, run: az acr build --registry $ACR_NAME --image bragi-builder:latest .)"
+else
+    echo "Building and pushing Docker image..."
+    az acr build --registry $ACR_NAME --image bragi-builder:latest .
+fi
 echo ""
 
 # Create Container Apps environment if it doesn't exist
@@ -49,7 +55,7 @@ echo ""
 
 # Get ACR credentials
 ACR_USERNAME=$(az acr credential show --name $ACR_NAME --query username -o tsv)
-ACR_PASSWORD=$(az acr credential show --name $ACR_NAME --query passwords[0].value -o tsv)
+ACR_PASSWORD=$(az acr credential show --name $ACR_NAME --query 'passwords[0].value' -o tsv)
 
 # Create or update Container App
 echo "📦 Creating/updating Container App..."

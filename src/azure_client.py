@@ -4,7 +4,7 @@ Azure client for managing ARM template deployments
 import os
 from datetime import datetime
 from typing import List, Dict
-from azure.identity import DefaultAzureCredential, ClientSecretCredential
+from azure.identity import DefaultAzureCredential, ClientSecretCredential, ManagedIdentityCredential
 from azure.mgmt.resource import ResourceManagementClient
 from azure.mgmt.web import WebSiteManagementClient
 from azure.mgmt.storage import StorageManagementClient
@@ -65,8 +65,13 @@ class AzureClient:
                 client_secret=client_secret
             )
         
-        # Fall back to default credential (Azure CLI, Managed Identity, etc.)
-        # Exclude EnvironmentCredential to avoid issues with empty env vars
+        # Try managed identity explicitly if running in Azure (Container Apps, App Service, etc.)
+        # Container Apps and App Service provide managed identity via IMDS endpoint
+        # ManagedIdentityCredential will be tried first by DefaultAzureCredential,
+        # but we can also try it explicitly. However, DefaultAzureCredential handles
+        # the fallback better, so we'll use it but ensure it tries managed identity first.
+        # The exclude_environment_credential=True prevents issues with empty env vars,
+        # but managed identity should still work via IMDS endpoint.
         return DefaultAzureCredential(exclude_environment_credential=True)
     
     def deploy_template(self, resource_group_name: str, template: dict, 

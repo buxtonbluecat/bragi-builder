@@ -38,6 +38,11 @@ from src.app_deployment import AppDeploymentManager
 # Load environment variables
 load_dotenv()
 
+# Configure socket timeouts for DNS resolution
+# This helps prevent DNS lookup timeouts in Azure environments
+import socket
+socket.setdefaulttimeout(30)  # 30 second timeout for DNS and connections
+
 app = Flask(__name__)
 app.secret_key = os.getenv('SECRET_KEY', 'dev-secret-key-change-in-production')
 socketio = SocketIO(app, cors_allowed_origins="*")

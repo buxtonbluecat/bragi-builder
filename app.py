@@ -965,7 +965,15 @@ def get_resource_groups():
             })
         return jsonify({"success": True, "resource_groups": serialized_groups})
     except Exception as e:
-        return jsonify({"success": False, "message": str(e)}), 400
+        # Clean up error message to remove HTML-like content (e.g., urllib3 object representations)
+        import re
+        error_msg = str(e)
+        # Remove urllib3 connection object representations
+        error_msg = re.sub(r'<[^>]+object at 0x[0-9a-f]+>', '', error_msg)
+        error_msg = error_msg.strip()
+        if not error_msg:
+            error_msg = "An unknown error occurred while listing resource groups"
+        return jsonify({"success": False, "message": error_msg}), 400
 
 
 @app.route('/environments')

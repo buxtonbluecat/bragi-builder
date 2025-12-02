@@ -373,6 +373,34 @@ def health():
     }), 200
 
 
+@app.route('/debug/dns')
+def debug_dns():
+    """Debug DNS resolution"""
+    import socket
+    import os
+    
+    results = {
+        'dns_tests': {},
+        'env_vars': {
+            'AZURE_SUBSCRIPTION_ID': os.getenv('AZURE_SUBSCRIPTION_ID'),
+            'PORT': os.getenv('PORT'),
+        }
+    }
+    
+    # Test DNS resolution
+    test_hosts = ['management.azure.com', 'login.microsoftonline.com', 'google.com']
+    for host in test_hosts:
+        try:
+            ip = socket.gethostbyname(host)
+            results['dns_tests'][host] = {'status': 'success', 'ip': ip}
+        except socket.gaierror as e:
+            results['dns_tests'][host] = {'status': 'failed', 'error': str(e)}
+        except Exception as e:
+            results['dns_tests'][host] = {'status': 'error', 'error': str(e)}
+    
+    return jsonify(results), 200
+
+
 @app.route('/')
 def index():
     """Main dashboard"""

@@ -133,7 +133,21 @@ class AzureClient:
             resource_groups = self.resource_client.resource_groups.list()
             return [rg for rg in resource_groups]
         except Exception as e:
-            raise Exception(f"Failed to list resource groups: {str(e)}")
+            # Clean up error message to avoid HTML-like content in JSON responses
+            error_str = str(e)
+            # Extract just the error message, not object representations
+            if 'Failed to resolve' in error_str or 'Lookup timed out' in error_str:
+                error_msg = "DNS resolution failed. Please check network connectivity and DNS configuration."
+            elif 'urllib3' in error_str or '<' in error_str:
+                # Extract meaningful error message without object representations
+                import re
+                error_msg = re.sub(r'<[^>]+object at 0x[0-9a-f]+>', '', error_str)
+                error_msg = error_msg.strip()
+                if not error_msg or error_msg == 'Failed to list resource groups: ':
+                    error_msg = "Failed to connect to Azure management API. Please check network connectivity."
+            else:
+                error_msg = error_str
+            raise Exception(f"Failed to list resource groups: {error_msg}")
     
     def create_resource_group(self, name: str, location: str, tags: dict = None):
         """Create a new resource group with optional tags"""

@@ -326,21 +326,28 @@ def get_detailed_status_message(status, elapsed_time, final=False):
     return status_messages.get(status, f'Status: {status} ({time_str})')
 
 
-@app.route('/login')
+@app.route('/login', methods=['GET', 'POST'])
 def login():
-    """Login route - redirects to Azure AD"""
+    """Login route - shows login page or redirects to Azure AD"""
     if auth.is_authenticated():
         return redirect(url_for('index'))
     
-    login_url = auth.get_login_url()
-    if login_url:
-        return redirect(login_url)
-    else:
-        # If Azure AD not configured, allow access (for development)
+    # Handle POST for development mode
+    if request.method == 'POST':
         flash("Azure AD authentication not configured. Running in development mode.", "info")
         session['authenticated'] = True
         session['user'] = {'displayName': 'Development User', 'mail': 'dev@localhost'}
         return redirect(url_for('index'))
+    
+    login_url = auth.get_login_url()
+    auth_enabled = login_url is not None
+    
+    # If Azure AD configured, redirect immediately
+    if login_url:
+        return redirect(login_url)
+    
+    # Otherwise show login page
+    return render_template('login.html', login_url=login_url, auth_enabled=auth_enabled)
 
 
 @app.route('/login/authorized')
@@ -430,6 +437,7 @@ def debug_dns():
 
 
 @app.route('/')
+@auth.require_auth
 def index():
     """Main dashboard"""
     templates = template_manager.list_templates()
@@ -441,6 +449,7 @@ def index():
 
 
 @app.route('/templates')
+@auth.require_auth
 def templates():
     """Template management page"""
     templates = template_manager.list_templates()
@@ -478,6 +487,7 @@ def template_detail(template_name):
 
 
 @app.route('/templates/<template_name>/edit', methods=['GET', 'POST'])
+@auth.require_auth
 def edit_template(template_name):
     """Edit template page"""
     if request.method == 'POST':
@@ -523,12 +533,14 @@ def deployments():
 
 
 @app.route('/metrics')
+@auth.require_auth
 def metrics():
     """Metrics dashboard page"""
     return render_template('metrics.html')
 
 
 @app.route('/deploy', methods=['POST'])
+@auth.require_auth
 def deploy():
     """Deploy a template"""
     if not deployment_manager:
@@ -951,6 +963,7 @@ def environment_endpoints_pdf(environment):
 
 
 @app.route('/resource-groups')
+@auth.require_auth
 def get_resource_groups():
     """Get all resource groups"""
     if not azure_client:
@@ -984,6 +997,7 @@ def get_resource_groups():
 
 
 @app.route('/environments')
+@auth.require_auth
 def environments_page():
     """Environment management page"""
     return render_template('environments.html')
@@ -1008,6 +1022,7 @@ def deploy_app_page():
 
 
 @app.route('/api/deploy-app/validate', methods=['POST'])
+@auth.require_auth
 def validate_app_deployment():
     """Validate deployment configuration"""
     if not app_deployment_manager:
@@ -1074,6 +1089,7 @@ def deploy_app():
 
 
 @app.route('/api/deploy-app/status/<deployment_id>')
+@auth.require_auth
 def get_app_deployment_status(deployment_id):
     """Get status of app deployment"""
     if not app_deployment_manager:
@@ -1669,6 +1685,7 @@ def get_deployment_resources(deployment_name):
 
 # Offline Review Routes
 @app.route('/offline-review')
+@auth.require_auth
 def offline_review_page():
     """Offline review page"""
     templates = template_manager.list_templates()
@@ -1793,6 +1810,7 @@ def get_workload_configs():
 
 # Template Wizard Routes
 @app.route('/template-wizard')
+@auth.require_auth
 def template_wizard_page():
     """Template wizard page"""
     return render_template('template_wizard.html')

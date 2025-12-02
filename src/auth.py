@@ -34,7 +34,8 @@ class AzureADAuth:
         if redirect_uri_env:
             self.redirect_uri = redirect_uri_env
         else:
-            # Fallback: construct from app config or use default
+            # Fallback: use environment variable or default
+            # The redirect URI will be constructed dynamically in get_login_url() if needed
             self.redirect_uri = os.getenv('AZURE_AD_REDIRECT_URI_PROD', 
                                          'http://localhost:8080/login/authorized')
         
@@ -62,10 +63,23 @@ class AzureADAuth:
         if not self.msal_app:
             return None
         
+        # Try to get redirect URI from request context if available
+        redirect_uri = self.redirect_uri
+        try:
+            from flask import request
+            if request and request.host:
+                # Construct redirect URI from current request
+                scheme = request.scheme
+                host = request.host
+                redirect_uri = f"{scheme}://{host}/login/authorized"
+        except:
+            # Use configured redirect URI
+            pass
+        
         # Generate authorization URL
         auth_url = self.msal_app.get_authorization_request_url(
             scopes=self.scopes,
-            redirect_uri=self.redirect_uri
+            redirect_uri=redirect_uri
         )
         return auth_url
     

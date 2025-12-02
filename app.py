@@ -389,17 +389,23 @@ def debug_dns():
         'env_vars': {
             'AZURE_SUBSCRIPTION_ID': os.getenv('AZURE_SUBSCRIPTION_ID'),
             'PORT': os.getenv('PORT'),
-        }
+        },
+        'socket_timeout': socket.getdefaulttimeout()
     }
     
-    # Test DNS resolution
+    # Test DNS resolution with explicit timeout
     test_hosts = ['management.azure.com', 'login.microsoftonline.com', 'google.com']
     for host in test_hosts:
         try:
-            ip = socket.gethostbyname(host)
+            # Use getaddrinfo which is what urllib3 uses
+            socket.setdefaulttimeout(30)
+            addr_info = socket.getaddrinfo(host, None, socket.AF_INET)
+            ip = addr_info[0][4][0]
             results['dns_tests'][host] = {'status': 'success', 'ip': ip}
         except socket.gaierror as e:
             results['dns_tests'][host] = {'status': 'failed', 'error': str(e)}
+        except socket.timeout as e:
+            results['dns_tests'][host] = {'status': 'timeout', 'error': str(e)}
         except Exception as e:
             results['dns_tests'][host] = {'status': 'error', 'error': str(e)}
     

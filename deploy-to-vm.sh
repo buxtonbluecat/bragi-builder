@@ -32,27 +32,62 @@ ssh -i $SSH_KEY_PATH -o StrictHostKeyChecking=no $ADMIN_USERNAME@$VM_IP "echo 'S
     exit 1
 }
 
-# Copy application files
-echo "Copying application files..."
-rsync -avz --progress \
-    -e "ssh -i $SSH_KEY_PATH" \
-    --exclude 'venv' \
-    --exclude '__pycache__' \
-    --exclude '*.pyc' \
-    --exclude '.git' \
-    --exclude '*.db' \
-    ./ $ADMIN_USERNAME@$VM_IP:$APP_DIR/
+# Deploy from git
+echo "Deploying from git repository..."
+GIT_REPO="${GIT_REPO:-https://github.com/buxtonbluecat/bragi-builder.git}"
+GIT_BRANCH="${GIT_BRANCH:-main}"
 
-# Install dependencies and start service
-echo "Installing dependencies and starting service..."
-ssh -i $SSH_KEY_PATH $ADMIN_USERNAME@$VM_IP << 'ENDSSH'
-    cd /opt/bragi-builder
-    sudo chown -R bragi:bragi /opt/bragi-builder
-    sudo -u bragi /opt/bragi-builder/venv/bin/pip install --upgrade pip
-    sudo -u bragi /opt/bragi-builder/venv/bin/pip install -r /opt/bragi-builder/requirements.txt
+ssh -i $SSH_KEY_PATH $ADMIN_USERNAME@$VM_IP bash << ENDSSH
+    set -e
+    cd $APP_DIR
+    
+    # Clone or update repository
+    if [ -d "$APP_DIR/.git" ]; then
+        echo "Updating repository from git..."
+        sudo -u bragi git fetch origin
+        sudo -u bragi git reset --hard origin/$GIT_BRANCH
+        sudo -u bragi git clean -fd
+    else
+        echo "Cloning repository from git..."
+        # Backup venv if it exists
+        if [ -d "$APP_DIR/venv" ]; then
+            echo "Backing up existing venv..."
+            sudo mv $APP_DIR/venv /tmp/venv-backup-$(date +%s)
+        fi
+        # Remove everything except venv backup
+        echo "Cleaning directory..."
+        sudo find $APP_DIR -mindepth 1 -maxdepth 1 ! -name venv -exec rm -rf {} \; 2>/dev/null || true
+        # Clone into a temp directory first
+        TEMP_DIR="/tmp/bragi-builder-$(date +%s)"
+        sudo -u bragi git clone -b $GIT_BRANCH $GIT_REPO $TEMP_DIR
+        # Move contents to app directory
+        sudo mv $TEMP_DIR/* $TEMP_DIR/.* $APP_DIR/ 2>/dev/null || true
+        sudo rm -rf $TEMP_DIR
+        # Restore venv if it existed
+        if [ -d "/tmp/venv-backup"* ]; then
+            VENV_BACKUP=$(ls -td /tmp/venv-backup-* 2>/dev/null | head -1)
+            if [ -n "$VENV_BACKUP" ]; then
+                echo "Restoring venv..."
+                sudo rm -rf $APP_DIR/venv
+                sudo mv $VENV_BACKUP $APP_DIR/venv
+            fi
+        fi
+    fi
+    
+    # Ensure proper ownership
+    sudo chown -R bragi:bragi $APP_DIR
+    
+    # Install/update dependencies
+    echo "Installing Python dependencies..."
+    sudo -u bragi $APP_DIR/venv/bin/pip install --upgrade pip
+    sudo -u bragi $APP_DIR/venv/bin/pip install -r $APP_DIR/requirements.txt
+    
+    # Restart services
+    echo "Restarting services..."
     sudo systemctl restart bragi-builder
     sudo systemctl restart nginx
-    sudo systemctl status bragi-builder --no-pager
+    sleep 2
+    sudo systemctl status bragi-builder --no-pager | head -15
 ENDSSH
 
 echo ""

@@ -43,15 +43,22 @@ load_dotenv()
 import socket
 socket.setdefaulttimeout(30)  # 30 second timeout for DNS and connections
 
-# Configure eventlet DNS resolution
-# Eventlet monkey-patches socket operations, which can cause DNS issues
-# We need to ensure DNS resolution works properly with eventlet
+# Configure async worker DNS resolution
+# Gevent and eventlet monkey-patch socket operations, which can cause DNS issues
+# We need to ensure DNS resolution works properly with async workers
 try:
-    import eventlet
-    # Patch DNS to use system resolver instead of eventlet's DNS
-    eventlet.patcher.monkey_patch(socket=True, select=True, time=True, thread=True)
-except ImportError:
+    import gevent
+    from gevent import monkey
+    # Gevent monkey-patching is done by gunicorn when using gevent worker class
+    # We just need to ensure socket timeouts are set
     pass
+except ImportError:
+    try:
+        import eventlet
+        # Patch DNS to use system resolver instead of eventlet's DNS
+        eventlet.patcher.monkey_patch(socket=True, select=True, time=True, thread=True)
+    except ImportError:
+        pass
 
 app = Flask(__name__)
 app.secret_key = os.getenv('SECRET_KEY', 'dev-secret-key-change-in-production')
